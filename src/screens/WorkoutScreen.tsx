@@ -1,12 +1,47 @@
-// WorkoutScreen.tsx: Workout UI wired to the local planner output with inline edits.
+// WorkoutScreen.tsx: Workout UI with plan view and session logging view.
 import React, { useEffect, useMemo, useState } from "react";
 import { ScrollView, Text, View, Pressable, TextInput } from "react-native";
 import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
+import { textStyles } from "../ui/TextStyles";
 import { useAppState } from "../state/AppState";
 import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
 import { buildWhyExplanation } from "../why/whyGenerator";
-import type { CheckIn, ExercisePlan, WorkoutPlan } from "../types/domain";
+import type {
+  CheckIn,
+  CompletedSessionSummary,
+  ExercisePlan,
+  ExerciseLog,
+  SetLog,
+  WorkoutPlan,
+  WorkoutSession,
+} from "../types/domain";
+
+// Build a summary from a completed session for the Why screen.
+function buildCompletedSummary(session: WorkoutSession): CompletedSessionSummary {
+  let totalVolume = 0;
+  let totalSets = 0;
+  let rpeSum = 0;
+  let rpeCount = 0;
+
+  session.exercises.forEach((exercise) => {
+    exercise.sets.forEach((set) => {
+      totalSets += 1;
+      totalVolume += set.reps * set.weight;
+      if (typeof set.rpe === "number") {
+        rpeSum += set.rpe;
+        rpeCount += 1;
+      }
+    });
+  });
+
+  return {
+    date: session.date,
+    volume_lbs: Math.round(totalVolume),
+    sets: totalSets,
+    rpe_avg: rpeCount ? Number((rpeSum / rpeCount).toFixed(1)) : 0,
+  };
+}
 
 // Workout tab screen with today summary and exercise placeholders.
 export function WorkoutScreen() {
@@ -17,12 +52,15 @@ export function WorkoutScreen() {
     needsRegen,
     hydrated,
     planByDate,
-    whyByDate,
     lastWorkout,
-    historyByDate,
+    activeSessionByDate,
+    workoutHistoryByDate,
     setPlan,
     setWhy,
     setNeedsRegen,
+    startSessionFromPlan,
+    updateActiveSession,
+    completeSession,
   } = useAppState();
 
   // Track which exercise row is expanded for inline editing.
@@ -61,16 +99,17 @@ export function WorkoutScreen() {
       const nextId = getPlanVersionId(selectedDate, existing?.id, needsRegen);
       const result = buildLocalPlan({ checkIn: todayCheckIn, lastWorkout, planId: nextId });
       // Build why from real inputs and persist alongside the plan.
+      const completedSession = workoutHistoryByDate[selectedDate];
+      const completedSummary = completedSession ? buildCompletedSummary(completedSession) : undefined;
       const why = buildWhyExplanation({
         checkIn: todayCheckIn,
         plan: result.plan,
         lastWorkout,
-        completedSession: historyByDate[selectedDate],
+        completedSessionForDate: completedSummary,
       });
       setPlan(selectedDate, result.plan);
       setWhy(selectedDate, why);
       setNeedsRegen(false);
-      console.log("generated plan", result.plan.id);
     }
   }, [
     hydrated,
@@ -79,7 +118,7 @@ export function WorkoutScreen() {
     needsRegen,
     selectedDate,
     todayCheckIn,
-    historyByDate,
+    workoutHistoryByDate,
     setPlan,
     setWhy,
     setNeedsRegen,
@@ -87,13 +126,52 @@ export function WorkoutScreen() {
 
   // Resolve the plan to render (if generated yet).
   const plan = planByDate[selectedDate];
-  // Track whether a check-in exists for the selected date.
-  const hasCheckIn = Boolean(checkInByDate[selectedDate]);
+  // Resolve the active session for this date (if any).
+  const activeSession = activeSessionByDate[selectedDate];
 
-  // Helper to parse numeric input while keeping draft text.
-  function parseNumber(value: string, fallback: number) {
+  // Sanitize numeric plan edits to avoid empty or invalid values.
+  function sanitizePlanNumber(value: string, fallback: number, min: number) {
+    if (!value.trim()) {
+      return fallback;
+    }
     const parsed = Number(value);
-    return Number.isNaN(parsed) ? fallback : parsed;
+    if (Number.isNaN(parsed)) {
+      return fallback;
+    }
+    return Math.max(min, parsed);
+  }
+
+  // Sanitize numeric session edits, keeping values non-negative.
+  function sanitizeSessionNumber(value: string, fallback: number) {
+    if (!value.trim()) {
+      return fallback;
+    }
+    const parsed = Number(value);
+    if (Number.isNaN(parsed)) {
+      return fallback;
+    }
+    return Math.max(0, parsed);
+  }
+
+  // Format a timestamp for the beta-friendly freshness label.
+  function formatTime(iso: string) {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      return "—";
+    }
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  // Parse optional RPE values without crashing on empty input.
+  function parseOptionalRpe(value: string, fallback?: number) {
+    if (!value.trim()) {
+      return undefined;
+    }
+    const parsed = Number(value);
+    if (Number.isNaN(parsed)) {
+      return fallback;
+    }
+    return Math.max(0, parsed);
   }
 
   // Expand an exercise row and seed the local draft for editing.
@@ -126,7 +204,8 @@ export function WorkoutScreen() {
       if (exercise.id !== exerciseId) {
         return exercise;
       }
-      const nextValue = parseNumber(value, exercise[field]);
+      const min = field === "weight" ? 0 : 1;
+      const nextValue = sanitizePlanNumber(value, exercise[field], min);
       return { ...exercise, [field]: nextValue };
     });
     const nextPlan = { ...plan, exercises: nextExercises };
@@ -188,11 +267,6 @@ export function WorkoutScreen() {
     return { ...freshPlan, exercises: mergedExercises };
   }
 
-  // Handler for workout actions (placeholder behavior).
-  function handleAction(label: string) {
-    console.log(`Workout action: ${label}`);
-  }
-
   // Handler for deterministic regeneration (overwrites plan + why).
   function handleRegenerate() {
     if (!lastWorkout) {
@@ -204,222 +278,474 @@ export function WorkoutScreen() {
     // Merge regenerated plan with existing edits using id/index fallbacks.
     const merged = plan ? mergePlans(result.plan, plan) : result.plan;
     // Build why from the merged plan to keep context aligned.
+    const completedSession = workoutHistoryByDate[selectedDate];
+    const completedSummary = completedSession ? buildCompletedSummary(completedSession) : undefined;
     const why = buildWhyExplanation({
       checkIn: todayCheckIn,
       plan: merged,
       lastWorkout,
-      completedSession: historyByDate[selectedDate],
+      completedSessionForDate: completedSummary,
     });
     setPlan(selectedDate, merged);
     setWhy(selectedDate, why);
     setNeedsRegen(false);
-    console.log("regenerated merged");
+  }
+
+  // Update a full session and persist immediately.
+  function saveSession(nextSession: WorkoutSession) {
+    updateActiveSession(selectedDate, nextSession);
+  }
+
+  // Update one exercise in the active session.
+  function updateSessionExercise(
+    exerciseId: string,
+    updater: (exercise: ExerciseLog) => ExerciseLog,
+  ) {
+    if (!activeSession) {
+      return;
+    }
+    const nextExercises = activeSession.exercises.map((exercise) =>
+      exercise.exerciseId === exerciseId ? updater(exercise) : exercise,
+    );
+    saveSession({ ...activeSession, exercises: nextExercises });
+  }
+
+  // Update a set field (reps, weight, or rpe) in the active session.
+  function updateSessionSet(
+    exerciseId: string,
+    setIndex: number,
+    field: "reps" | "weight" | "rpe",
+    value: string,
+  ) {
+    updateSessionExercise(exerciseId, (exercise) => {
+      const nextSets: SetLog[] = exercise.sets.map((set, index) => {
+        if (index !== setIndex) {
+          return set;
+        }
+        if (field === "rpe") {
+          return { ...set, rpe: parseOptionalRpe(value, set.rpe) };
+        }
+        return { ...set, [field]: sanitizeSessionNumber(value, set[field]) };
+      });
+      return { ...exercise, sets: nextSets };
+    });
+  }
+
+  // Toggle pain flag on an exercise entry.
+  function togglePainFlag(exerciseId: string) {
+    updateSessionExercise(exerciseId, (exercise) => ({
+      ...exercise,
+      painFlag: !exercise.painFlag,
+    }));
+  }
+
+  // Update the note for an exercise entry.
+  function updateExerciseNote(exerciseId: string, note: string) {
+    updateSessionExercise(exerciseId, (exercise) => ({
+      ...exercise,
+      note,
+    }));
+  }
+
+  // Add a new set, duplicating the last set's reps and weight.
+  function handleAddSet(exerciseId: string) {
+    updateSessionExercise(exerciseId, (exercise) => {
+      const lastSet = exercise.sets[exercise.sets.length - 1];
+      const nextSet: SetLog = lastSet
+        ? { reps: lastSet.reps, weight: lastSet.weight, rpe: lastSet.rpe }
+        : { reps: 0, weight: 0 };
+      return { ...exercise, sets: [...exercise.sets, nextSet] };
+    });
+  }
+
+  if (!hydrated) {
+    return (
+      <ScrollView
+        // Loading state while hydration completes.
+        contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
+      >
+        <Text style={textStyles.title}>Workout</Text>
+        <Card>
+          <Text style={textStyles.heading}>Loading your plan...</Text>
+          <Text style={textStyles.caption}>Just a moment while we sync your local data.</Text>
+        </Card>
+      </ScrollView>
+    );
+  }
+
+  if (!plan) {
+    return (
+      <ScrollView
+        // Empty state when no plan is available yet.
+        contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
+      >
+        <Text style={textStyles.title}>Workout</Text>
+        <Card>
+          <Text style={textStyles.heading}>No plan yet</Text>
+          <Text style={textStyles.caption}>
+            Generate today’s plan to start tracking your workout.
+          </Text>
+          <Pressable
+            // Manual trigger for plan generation when needed.
+            onPress={() => setNeedsRegen(true)}
+            style={{
+              marginTop: spacing.sm,
+              borderWidth: 1,
+              borderColor: colors.border,
+              paddingVertical: spacing.sm,
+              borderRadius: 10,
+              alignItems: "center",
+            }}
+          >
+            <Text style={textStyles.body}>Generate plan</Text>
+          </Pressable>
+        </Card>
+      </ScrollView>
+    );
+  }
+
+  if (activeSession) {
+    return (
+      <ScrollView
+        // Scrollable container for session logging UI.
+        contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
+      >
+        <Text style={textStyles.title}>Workout</Text>
+
+        <Card>
+          <Text style={textStyles.heading}>Session in progress</Text>
+          <Text style={textStyles.caption}>{activeSession.title}</Text>
+        </Card>
+
+        {activeSession.exercises.map((exercise) => (
+          <Card key={exercise.exerciseId}>
+            <Text style={textStyles.heading}>{exercise.name}</Text>
+
+            <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs }}>
+              <Pressable
+                // Simple toggle for logging pain signal.
+                onPress={() => togglePainFlag(exercise.exerciseId)}
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  paddingVertical: spacing.xs,
+                  paddingHorizontal: spacing.sm,
+                  borderRadius: 8,
+                  backgroundColor: exercise.painFlag ? colors.card : "transparent",
+                }}
+              >
+                <Text style={textStyles.caption}>
+                  Pain: {exercise.painFlag ? "Yes" : "No"}
+                </Text>
+              </Pressable>
+            </View>
+
+            <View style={{ gap: spacing.xs, marginTop: spacing.sm }}>
+              <Text style={textStyles.caption}>Notes</Text>
+              <TextInput
+                // Autosave notes on change.
+                value={exercise.note ?? ""}
+                onChangeText={(value) => updateExerciseNote(exercise.exerciseId, value)}
+                placeholder="Notes"
+                multiline
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  padding: spacing.sm,
+                  borderRadius: 8,
+                  minHeight: 60,
+                  textAlignVertical: "top",
+                }}
+              />
+            </View>
+
+            <View style={{ gap: spacing.sm, marginTop: spacing.sm }}>
+              {exercise.sets.map((set, index) => (
+                <View key={`${exercise.exerciseId}-set-${index}`} style={{ gap: spacing.xs }}>
+                  <Text style={textStyles.caption}>Set {index + 1}</Text>
+                  <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                    <TextInput
+                      // Autosave reps input.
+                      value={String(set.reps)}
+                      onChangeText={(value) =>
+                        updateSessionSet(exercise.exerciseId, index, "reps", value)
+                      }
+                      keyboardType="number-pad"
+                      placeholder="Reps"
+                      style={{
+                        flex: 1,
+                        borderWidth: 1,
+                        borderColor: colors.border,
+                        padding: spacing.xs,
+                        borderRadius: 8,
+                      }}
+                    />
+                    <TextInput
+                      // Autosave weight input.
+                      value={String(set.weight)}
+                      onChangeText={(value) =>
+                        updateSessionSet(exercise.exerciseId, index, "weight", value)
+                      }
+                      keyboardType="number-pad"
+                      placeholder="Weight"
+                      style={{
+                        flex: 1,
+                        borderWidth: 1,
+                        borderColor: colors.border,
+                        padding: spacing.xs,
+                        borderRadius: 8,
+                      }}
+                    />
+                    <TextInput
+                      // Autosave optional RPE input.
+                      value={set.rpe === undefined ? "" : String(set.rpe)}
+                      onChangeText={(value) =>
+                        updateSessionSet(exercise.exerciseId, index, "rpe", value)
+                      }
+                      keyboardType="number-pad"
+                      placeholder="RPE"
+                      style={{
+                        flex: 1,
+                        borderWidth: 1,
+                        borderColor: colors.border,
+                        padding: spacing.xs,
+                        borderRadius: 8,
+                      }}
+                    />
+                  </View>
+                </View>
+              ))}
+
+              <Pressable
+                // Add a new set with the last set's numbers.
+                onPress={() => handleAddSet(exercise.exerciseId)}
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  paddingVertical: spacing.xs,
+                  borderRadius: 8,
+                  alignItems: "center",
+                }}
+              >
+                <Text style={textStyles.caption}>+ Add set</Text>
+              </Pressable>
+            </View>
+          </Card>
+        ))}
+
+        <Pressable
+          // Complete workout button moves session to history.
+          onPress={() => completeSession(selectedDate)}
+          style={{
+            borderWidth: 1,
+            borderColor: colors.border,
+            paddingVertical: spacing.md,
+            borderRadius: 12,
+            alignItems: "center",
+          }}
+        >
+          <Text style={textStyles.body}>Complete workout</Text>
+        </Pressable>
+      </ScrollView>
+    );
   }
 
   return (
     <ScrollView
       // Scrollable container keeps content accessible on small screens.
-      contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}
+      contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
     >
-      <Text style={{ fontSize: 28, fontWeight: "700", color: colors.text }}>
-        Workout
+      <Text style={textStyles.title}>Workout</Text>
+
+      <Card>
+        <Text style={textStyles.heading}>
+          Today: {plan.title}
+        </Text>
+        <Text style={textStyles.caption}>
+          {plan.duration_min} min • {plan.equipment}
+        </Text>
+        {plan.generatedAt ? (
+          <Text style={textStyles.caption}>
+            Last updated: {formatTime(plan.generatedAt)}
+          </Text>
+        ) : null}
+      </Card>
+
+      <Card>
+        <Text style={textStyles.heading}>
+          Suggested intensity: {plan.intensity_adjustment_pct}%
+        </Text>
+        <Text style={textStyles.caption}>
+          Reason: {plan.intensity_reason}
+        </Text>
+      </Card>
+
+      {/* Safety disclaimer for recommendation copy. */}
+      <Text style={textStyles.caption}>
+        Not medical advice. Adjust based on pain and consult a professional if needed.
       </Text>
 
       <Card>
-        <Text style={{ fontWeight: "600" }}>
-          Today: {plan ? plan.title : "Glutes + Hamstrings"}
-        </Text>
-        <Text style={{ color: colors.muted }}>
-          {plan ? `${plan.duration_min} min • ${plan.equipment}` : "60 min • Barbell + Machines"}
-        </Text>
-      </Card>
-
-      <Card>
-        <Text style={{ fontWeight: "600" }}>
-          Suggested intensity: {plan ? `${plan.intensity_adjustment_pct}%` : "—"}
-        </Text>
-        <Text style={{ color: colors.muted }}>
-          {plan ? `Reason: ${plan.intensity_reason}` : "Reason: —"}
-        </Text>
-      </Card>
-
-      <Card>
-        <Text style={{ fontWeight: "600" }}>Exercises</Text>
+        <Text style={textStyles.heading}>Exercises</Text>
         <View style={{ gap: spacing.xs }}>
-          {plan
-            ? plan.exercises.map((exercise) => {
-                const isExpanded = expandedId === exercise.id;
-                return (
-                  <View
-                    // Exercise row with inline edit controls.
-                    key={exercise.id}
-                    style={{
-                      borderWidth: 1,
-                      borderColor: colors.border,
-                      padding: spacing.sm,
-                      borderRadius: 10,
-                      gap: spacing.xs,
-                    }}
+          {plan.exercises.map((exercise) => {
+            const isExpanded = expandedId === exercise.id;
+            return (
+              <View
+                // Exercise row with inline edit controls.
+                key={exercise.id}
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  padding: spacing.sm,
+                  borderRadius: 10,
+                  gap: spacing.xs,
+                }}
+              >
+                <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                  <View style={{ flex: 1, gap: spacing.xs }}>
+                    <Text style={textStyles.body}>{exercise.name}</Text>
+                    <Text style={textStyles.caption}>
+                      {exercise.sets}x{exercise.reps} @ {exercise.weight}
+                    </Text>
+                  </View>
+                  <Pressable
+                    // Toggle inline editor for this exercise.
+                    onPress={() => (isExpanded ? handleCollapse() : handleExpand(exercise))}
+                    style={{ paddingHorizontal: spacing.sm, paddingVertical: spacing.xs }}
                   >
-                    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                    <Text style={textStyles.caption}>{isExpanded ? "Close" : "Edit"}</Text>
+                  </Pressable>
+                </View>
+
+                {isExpanded ? (
+                  <View style={{ gap: spacing.sm }}>
+                    {/* Inline numeric edits with autosave on change. */}
+                    <View style={{ flexDirection: "row", gap: spacing.sm }}>
                       <View style={{ flex: 1, gap: spacing.xs }}>
-                        <Text>{exercise.name}</Text>
-                        <Text style={{ color: colors.muted }}>
-                          {exercise.sets}x{exercise.reps} @ {exercise.weight}
-                        </Text>
+                        <Text style={textStyles.caption}>Sets</Text>
+                        <TextInput
+                          // Autosave edits for sets.
+                          value={draft.sets}
+                          onChangeText={(value) => {
+                            setDraft((prev) => ({ ...prev, sets: value }));
+                            updateExerciseField(exercise.id, "sets", value);
+                          }}
+                          keyboardType="number-pad"
+                          style={{
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            padding: spacing.xs,
+                            borderRadius: 8,
+                          }}
+                        />
                       </View>
+                      <View style={{ flex: 1, gap: spacing.xs }}>
+                        <Text style={textStyles.caption}>Reps</Text>
+                        <TextInput
+                          // Autosave edits for reps.
+                          value={draft.reps}
+                          onChangeText={(value) => {
+                            setDraft((prev) => ({ ...prev, reps: value }));
+                            updateExerciseField(exercise.id, "reps", value);
+                          }}
+                          keyboardType="number-pad"
+                          style={{
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            padding: spacing.xs,
+                            borderRadius: 8,
+                          }}
+                        />
+                      </View>
+                      <View style={{ flex: 1, gap: spacing.xs }}>
+                        <Text style={textStyles.caption}>Weight</Text>
+                        <TextInput
+                          // Autosave edits for weight.
+                          value={draft.weight}
+                          onChangeText={(value) => {
+                            setDraft((prev) => ({ ...prev, weight: value }));
+                            updateExerciseField(exercise.id, "weight", value);
+                          }}
+                          keyboardType="number-pad"
+                          style={{
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            padding: spacing.xs,
+                            borderRadius: 8,
+                          }}
+                        />
+                      </View>
+                    </View>
+
+                    <View style={{ flexDirection: "row", gap: spacing.sm }}>
                       <Pressable
-                        // Toggle inline editor for this exercise.
-                        onPress={() => (isExpanded ? handleCollapse() : handleExpand(exercise))}
-                        style={{ paddingHorizontal: spacing.sm, paddingVertical: spacing.xs }}
+                        // Revert edits back to last saved plan.
+                        onPress={handleCancel}
+                        style={{
+                          flex: 1,
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                          paddingVertical: spacing.xs,
+                          borderRadius: 8,
+                          alignItems: "center",
+                        }}
                       >
-                        <Text style={{ color: colors.muted }}>{isExpanded ? "Close" : "Edit"}</Text>
+                        <Text style={textStyles.caption}>Cancel</Text>
+                      </Pressable>
+                      <Pressable
+                        // Toggle alternative selection list.
+                        onPress={() => setShowAlternatives((prev) => !prev)}
+                        style={{
+                          flex: 1,
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                          paddingVertical: spacing.xs,
+                          borderRadius: 8,
+                          alignItems: "center",
+                        }}
+                      >
+                        <Text style={textStyles.caption}>
+                          {showAlternatives ? "Hide Swap" : "Swap"}
+                        </Text>
                       </Pressable>
                     </View>
 
-                    {isExpanded ? (
-                      <View style={{ gap: spacing.sm }}>
-                        {/* Inline numeric edits with autosave on change. */}
-                        <View style={{ flexDirection: "row", gap: spacing.sm }}>
-                          <View style={{ flex: 1, gap: spacing.xs }}>
-                            <Text style={{ color: colors.muted }}>Sets</Text>
-                            <TextInput
-                              // Autosave edits for sets.
-                              value={draft.sets}
-                              onChangeText={(value) => {
-                                setDraft((prev) => ({ ...prev, sets: value }));
-                                updateExerciseField(exercise.id, "sets", value);
-                              }}
-                              keyboardType="number-pad"
-                              style={{
-                                borderWidth: 1,
-                                borderColor: colors.border,
-                                padding: spacing.xs,
-                                borderRadius: 8,
-                              }}
-                            />
-                          </View>
-                          <View style={{ flex: 1, gap: spacing.xs }}>
-                            <Text style={{ color: colors.muted }}>Reps</Text>
-                            <TextInput
-                              // Autosave edits for reps.
-                              value={draft.reps}
-                              onChangeText={(value) => {
-                                setDraft((prev) => ({ ...prev, reps: value }));
-                                updateExerciseField(exercise.id, "reps", value);
-                              }}
-                              keyboardType="number-pad"
-                              style={{
-                                borderWidth: 1,
-                                borderColor: colors.border,
-                                padding: spacing.xs,
-                                borderRadius: 8,
-                              }}
-                            />
-                          </View>
-                          <View style={{ flex: 1, gap: spacing.xs }}>
-                            <Text style={{ color: colors.muted }}>Weight</Text>
-                            <TextInput
-                              // Autosave edits for weight.
-                              value={draft.weight}
-                              onChangeText={(value) => {
-                                setDraft((prev) => ({ ...prev, weight: value }));
-                                updateExerciseField(exercise.id, "weight", value);
-                              }}
-                              keyboardType="number-pad"
-                              style={{
-                                borderWidth: 1,
-                                borderColor: colors.border,
-                                padding: spacing.xs,
-                                borderRadius: 8,
-                              }}
-                            />
-                          </View>
-                        </View>
-
-                        <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                    {showAlternatives && exercise.alternatives?.length ? (
+                      <View style={{ gap: spacing.xs }}>
+                        {/* Inline alternatives list for swapping exercises. */}
+                        {exercise.alternatives.map((alt) => (
                           <Pressable
-                            // Revert edits back to last saved plan.
-                            onPress={handleCancel}
+                            // Replace exercise name while preserving prescription.
+                            key={alt}
+                            onPress={() => handleSwap(exercise, alt)}
                             style={{
-                              flex: 1,
                               borderWidth: 1,
                               borderColor: colors.border,
                               paddingVertical: spacing.xs,
+                              paddingHorizontal: spacing.sm,
                               borderRadius: 8,
-                              alignItems: "center",
                             }}
                           >
-                            <Text style={{ color: colors.muted }}>Cancel</Text>
+                            <Text style={textStyles.caption}>{alt}</Text>
                           </Pressable>
-                          <Pressable
-                            // Toggle alternative selection list.
-                            onPress={() => setShowAlternatives((prev) => !prev)}
-                            style={{
-                              flex: 1,
-                              borderWidth: 1,
-                              borderColor: colors.border,
-                              paddingVertical: spacing.xs,
-                              borderRadius: 8,
-                              alignItems: "center",
-                            }}
-                          >
-                            <Text style={{ color: colors.muted }}>
-                              {showAlternatives ? "Hide Swap" : "Swap"}
-                            </Text>
-                          </Pressable>
-                        </View>
-
-                        {showAlternatives && exercise.alternatives?.length ? (
-                          <View style={{ gap: spacing.xs }}>
-                            {/* Inline alternatives list for swapping exercises. */}
-                            {exercise.alternatives.map((alt) => (
-                              <Pressable
-                                // Replace exercise name while preserving prescription.
-                                key={alt}
-                                onPress={() => handleSwap(exercise, alt)}
-                                style={{
-                                  borderWidth: 1,
-                                  borderColor: colors.border,
-                                  paddingVertical: spacing.xs,
-                                  paddingHorizontal: spacing.sm,
-                                  borderRadius: 8,
-                                }}
-                              >
-                                <Text style={{ color: colors.muted }}>{alt}</Text>
-                              </Pressable>
-                            ))}
-                          </View>
-                        ) : null}
+                        ))}
                       </View>
                     ) : null}
                   </View>
-                );
-              })
-            : ["Back Squat", "Romanian Deadlift", "Hip Thrust", "Leg Curl", "Calf Raise"].map(
-                (name) => (
-                  <View
-                    // Simple list rows for exercise placeholders.
-                    key={name}
-                    style={{
-                      borderWidth: 1,
-                      borderColor: colors.border,
-                      padding: spacing.sm,
-                      borderRadius: 10,
-                    }}
-                  >
-                    <Text>{name}</Text>
-                    <Text style={{ color: colors.muted }}>3x8 @ 175</Text>
-                  </View>
-                ),
-              )}
+                ) : null}
+              </View>
+            );
+          })}
         </View>
       </Card>
 
       <View style={{ flexDirection: "row", gap: spacing.sm }}>
         <Pressable
-          // Action button for starting the workout (no logging yet).
-          onPress={() => handleAction("Start workout")}
+          // Action button for starting the workout and creating a session.
+          onPress={() => {
+            startSessionFromPlan(selectedDate, plan);
+          }}
           style={{
             flex: 1,
             borderWidth: 1,
@@ -429,7 +755,7 @@ export function WorkoutScreen() {
             alignItems: "center",
           }}
         >
-          <Text style={{ fontWeight: "600" }}>Start workout</Text>
+          <Text style={textStyles.body}>Start workout</Text>
         </Pressable>
         <Pressable
           // Deterministic regeneration button.
@@ -443,17 +769,9 @@ export function WorkoutScreen() {
             alignItems: "center",
           }}
         >
-          <Text style={{ fontWeight: "600" }}>Regenerate</Text>
+          <Text style={textStyles.body}>Regenerate</Text>
         </Pressable>
       </View>
-
-      {/* Minimal debug line to validate hydration and persistence. */}
-      <Text style={{ color: colors.muted, fontSize: 12 }}>
-        Hydrated: {hydrated ? "true" : "false"} | needsRegen: {needsRegen ? "true" : "false"}
-      </Text>
-      <Text style={{ color: colors.muted, fontSize: 12 }}>
-        HasCheckIn: {hasCheckIn ? "yes" : "no"} | HasPlan: {plan ? "yes" : "no"} | HasWhy: {whyByDate[selectedDate] ? "yes" : "no"}
-      </Text>
     </ScrollView>
   );
 }

@@ -32,7 +32,7 @@ function AppShell() {
   function renderScreen() {
     switch (activeTab) {
       case "previous":
-        return <PreviousScreen />;
+        return <PreviousScreen onNavigateToWorkout={() => setActiveTab("workout")} />;
       case "cycle":
         return <CycleScreen />;
       case "workout":

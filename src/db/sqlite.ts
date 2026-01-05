@@ -64,6 +64,22 @@ export async function kvSet<T>(key: string, value: T): Promise<void> {
   ]);
 }
 
+// Delete a key from the key-value table.
+export async function kvDelete(key: string): Promise<void> {
+  await initDb();
+  const db = await getDb();
+  // Remove a stored key for reset or cleanup actions.
+  await db.runAsync("DELETE FROM kv WHERE key = ?;", [key]);
+}
+
+// Delete a set of keys from the key-value table.
+export async function kvClear(keys: string[]): Promise<void> {
+  // Sequential deletion keeps the logic simple and consistent.
+  for (const key of keys) {
+    await kvDelete(key);
+  }
+}
+
 // Persist JSON data for an arbitrary key.
 export async function saveJsonByKey(key: string, payload: unknown) {
   // Serialize JSON explicitly to keep storage consistent.

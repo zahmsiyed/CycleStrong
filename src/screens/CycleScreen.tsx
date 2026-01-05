@@ -1,8 +1,9 @@
 // CycleScreen.tsx: Cycle check-in UI with local persistence via AppState.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, Text, View, Pressable, TextInput } from "react-native";
 import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
+import { textStyles } from "../ui/TextStyles";
 import { useAppState } from "../state/AppState";
 import type { CheckIn, CyclePhase, SymptomTag } from "../types/domain";
 
@@ -12,10 +13,10 @@ export function CycleScreen() {
   const {
     checkInByDate,
     selectedDate,
-    needsRegen,
     setSelectedDate,
     upsertCheckIn,
     setNeedsRegen,
+    resetLocalData,
   } = useAppState();
   // Local draft state to avoid persisting on every keystroke.
   const [draft, setDraft] = useState<CheckIn>({
@@ -25,6 +26,12 @@ export function CycleScreen() {
   });
   // Local toggle for manual phase override controls.
   const [showManualPhase, setShowManualPhase] = useState<boolean>(false);
+  // Local confirm toggle for data reset actions.
+  const [confirmReset, setConfirmReset] = useState<boolean>(false);
+  // Beta-safe confirmation copy for successful updates.
+  const [showUpdatedNotice, setShowUpdatedNotice] = useState<boolean>(false);
+  // Track the timeout so we can clean it up between updates.
+  const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Rebuild the draft whenever the selected date or stored data changes.
   useEffect(() => {
@@ -40,13 +47,30 @@ export function CycleScreen() {
     setShowManualPhase(Boolean(stored?.phase_override));
   }, [checkInByDate, selectedDate]);
 
-  // Helper for optional numeric inputs.
-  function parseOptionalNumber(value: string) {
+  // Clear any pending confirmation timeout on unmount.
+  useEffect(() => {
+    return () => {
+      if (noticeTimeoutRef.current) {
+        clearTimeout(noticeTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Clamp numeric inputs to a safe range.
+  function clampNumber(value: number, min: number, max: number) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  // Helper for optional numeric inputs with clamping.
+  function parseClampedNumber(value: string, min: number, max: number) {
     if (!value.trim()) {
       return undefined;
     }
     const numberValue = Number(value);
-    return Number.isNaN(numberValue) ? undefined : numberValue;
+    if (Number.isNaN(numberValue)) {
+      return undefined;
+    }
+    return clampNumber(numberValue, min, max);
   }
 
   // Helper to parse an ISO date string safely.
@@ -58,13 +82,22 @@ export function CycleScreen() {
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
+  // Inline validation for last period start input.
+  const lastPeriodError = useMemo(() => {
+    if (!draft.last_period_start) {
+      return null;
+    }
+    return parseISODate(draft.last_period_start) ? null : "Invalid date";
+  }, [draft.last_period_start]);
+
   // Predict the cycle day based on last period start and cycle length.
   const predictedDay = useMemo(() => {
     const startDate = parseISODate(draft.last_period_start);
-    const cycleLength = draft.cycle_length;
-    if (!startDate || !cycleLength) {
+    const rawCycleLength = draft.cycle_length;
+    if (!startDate || !rawCycleLength || lastPeriodError) {
       return null;
     }
+    const cycleLength = clampNumber(rawCycleLength, 20, 40);
     const selected = parseISODate(selectedDate);
     if (!selected) {
       return null;
@@ -76,7 +109,7 @@ export function CycleScreen() {
     }
     // Cycle day is calculated as a modulo over the cycle length.
     return (diffDays % cycleLength) + 1;
-  }, [draft.last_period_start, draft.cycle_length, selectedDate]);
+  }, [draft.last_period_start, draft.cycle_length, selectedDate, lastPeriodError]);
 
   // Predict the phase based on the simple MVP day-range heuristic.
   const predictedPhase = useMemo(() => {
@@ -129,7 +162,7 @@ export function CycleScreen() {
     });
   }
 
-  // Save the check-in, mark regen as needed, and log the payload.
+  // Save the check-in, mark regen as needed.
   async function handleUpdate() {
     // Persist predicted values into the stored check-in for planner use.
     const payload: CheckIn = {
@@ -140,30 +173,46 @@ export function CycleScreen() {
     };
     await upsertCheckIn(payload);
     setNeedsRegen(true);
-    // Log a compact confirmation for the persistence loop.
-    console.log("saved checkin", payload);
+
+    // Beta observability affordance: confirm update briefly.
+    setShowUpdatedNotice(true);
+    if (noticeTimeoutRef.current) {
+      clearTimeout(noticeTimeoutRef.current);
+    }
+    noticeTimeoutRef.current = setTimeout(() => {
+      setShowUpdatedNotice(false);
+    }, 2000);
   }
+
+  // Reset local data with a simple confirmation toggle.
+  async function handleReset() {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      return;
+    }
+    await resetLocalData();
+    setConfirmReset(false);
+  }
+
+  const hasCycleDetails = Boolean(
+    draft.last_period_start || draft.cycle_length || draft.typical_bleed_days,
+  );
 
   return (
     <ScrollView
       // Scrollable container to keep layout flexible.
-      contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}
+      contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
     >
-      <Text style={{ fontSize: 28, fontWeight: "700", color: colors.text }}>
-        Cycle
-      </Text>
-
-      {/* Quick readout of regeneration status for debugging. */}
-      <Text style={{ color: colors.muted }}>Needs regen: {needsRegen ? "yes" : "no"}</Text>
+      <Text style={textStyles.title}>Cycle</Text>
 
       <Card>
         {/* Cycle day and phase display block. */}
-        <Text style={{ fontWeight: "600" }}>
+        <Text style={textStyles.heading}>
           Day {predictedDay ?? "—"} of {draft.cycle_length ?? "—"} • Phase: {activePhase} {phaseLabel}
         </Text>
         {/* Selected date control for switching the active check-in date. */}
         <View style={{ gap: spacing.xs }}>
-          <Text style={{ color: colors.muted }}>Selected date (YYYY-MM-DD)</Text>
+          <Text style={textStyles.caption}>Selected date (YYYY-MM-DD)</Text>
           <TextInput
             // Date input used to change the active check-in date.
             value={selectedDate}
@@ -183,7 +232,7 @@ export function CycleScreen() {
           onPress={toggleManualPhaseControls}
           style={{ paddingVertical: spacing.xs }}
         >
-          <Text style={{ color: colors.muted }}>Edit if inaccurate</Text>
+          <Text style={textStyles.caption}>Edit if inaccurate</Text>
         </Pressable>
         {showManualPhase ? (
           <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
@@ -201,7 +250,7 @@ export function CycleScreen() {
                   backgroundColor: draft.phase_override === phase ? colors.card : "transparent",
                 }}
               >
-                <Text style={{ color: colors.muted }}>{phase}</Text>
+                <Text style={textStyles.caption}>{phase}</Text>
               </Pressable>
             ))}
           </View>
@@ -210,10 +259,15 @@ export function CycleScreen() {
 
       <Card>
         {/* Cycle detail inputs (optional). */}
-        <Text style={{ fontWeight: "600" }}>Cycle details</Text>
+        <Text style={textStyles.heading}>Cycle details</Text>
+        {!hasCycleDetails ? (
+          <Text style={textStyles.caption}>
+            Optional: add cycle details to improve recommendations.
+          </Text>
+        ) : null}
         <View style={{ gap: spacing.sm }}>
           <View style={{ gap: spacing.xs }}>
-            <Text style={{ color: colors.muted }}>Last period start (YYYY-MM-DD)</Text>
+            <Text style={textStyles.caption}>Last period start (YYYY-MM-DD)</Text>
             <TextInput
               // Text input for ISO date.
               value={draft.last_period_start ?? ""}
@@ -227,14 +281,20 @@ export function CycleScreen() {
                 borderRadius: 10,
               }}
             />
+            {lastPeriodError ? (
+              <Text style={{ color: "#B00020", fontSize: 12 }}>{lastPeriodError}</Text>
+            ) : null}
           </View>
           <View style={{ gap: spacing.xs }}>
-            <Text style={{ color: colors.muted }}>Cycle length</Text>
+            <Text style={textStyles.caption}>Cycle length</Text>
             <TextInput
-              // Numeric input for cycle length.
+              // Numeric input for cycle length (clamped to 20-40 days).
               value={draft.cycle_length?.toString() ?? ""}
               onChangeText={(value) =>
-                setDraft((prev) => ({ ...prev, cycle_length: parseOptionalNumber(value) }))
+                setDraft((prev) => ({
+                  ...prev,
+                  cycle_length: parseClampedNumber(value, 20, 40),
+                }))
               }
               keyboardType="number-pad"
               placeholder="28"
@@ -247,12 +307,15 @@ export function CycleScreen() {
             />
           </View>
           <View style={{ gap: spacing.xs }}>
-            <Text style={{ color: colors.muted }}>Typical bleed days</Text>
+            <Text style={textStyles.caption}>Typical bleed days</Text>
             <TextInput
-              // Numeric input for typical bleed days.
+              // Numeric input for typical bleed days (clamped to 2-10 days).
               value={draft.typical_bleed_days?.toString() ?? ""}
               onChangeText={(value) =>
-                setDraft((prev) => ({ ...prev, typical_bleed_days: parseOptionalNumber(value) }))
+                setDraft((prev) => ({
+                  ...prev,
+                  typical_bleed_days: parseClampedNumber(value, 2, 10),
+                }))
               }
               keyboardType="number-pad"
               placeholder="5"
@@ -269,7 +332,7 @@ export function CycleScreen() {
 
       <Card>
         {/* Symptom selection chips (with "none" exclusivity). */}
-        <Text style={{ fontWeight: "600" }}>Symptoms (today)</Text>
+        <Text style={textStyles.heading}>Symptoms (today)</Text>
         <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
           {(["low_energy", "cramps", "bloating", "headache", "none"] as const).map(
             (symptom) => {
@@ -288,7 +351,7 @@ export function CycleScreen() {
                     backgroundColor: active ? colors.card : "transparent",
                   }}
                 >
-                  <Text style={{ color: colors.muted }}>{symptom}</Text>
+                  <Text style={textStyles.caption}>{symptom}</Text>
                 </Pressable>
               );
             },
@@ -307,8 +370,37 @@ export function CycleScreen() {
           alignItems: "center",
         }}
       >
-        <Text style={{ fontWeight: "600" }}>Update & regenerate plan</Text>
+        <Text style={textStyles.body}>Update & regenerate plan</Text>
       </Pressable>
+
+      {showUpdatedNotice ? (
+        <Text style={textStyles.caption}>Updated — today’s plan refreshed</Text>
+      ) : null}
+
+      <Card>
+        {/* Reset local data control for beta support. */}
+        <Text style={textStyles.heading}>Reset local data</Text>
+        <Text style={textStyles.caption}>
+          Clears all local check-ins, plans, workout history, and feedback.
+        </Text>
+        <Pressable
+          // Confirmation toggle for destructive reset.
+          onPress={handleReset}
+          style={{
+            marginTop: spacing.sm,
+            borderWidth: 1,
+            borderColor: confirmReset ? "#B00020" : colors.border,
+            paddingVertical: spacing.sm,
+            borderRadius: 10,
+            alignItems: "center",
+            backgroundColor: confirmReset ? "#FDECEC" : "transparent",
+          }}
+        >
+          <Text style={{ color: confirmReset ? "#B00020" : colors.text }}>
+            {confirmReset ? "Are you sure? Tap again to reset" : "Reset local data"}
+          </Text>
+        </Pressable>
+      </Card>
     </ScrollView>
   );
 }

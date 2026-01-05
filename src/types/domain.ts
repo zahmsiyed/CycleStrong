@@ -38,6 +38,8 @@ export type ExercisePlan = {
 export type WorkoutPlan = {
   id: string;
   date: ISODate;
+  // Timestamp for plan freshness UI in the beta build.
+  generatedAt?: string;
   title: string;
   duration_min: number;
   equipment: string;
@@ -45,6 +47,37 @@ export type WorkoutPlan = {
   intensity_reason: string;
   exercises: ExercisePlan[];
 };
+
+// Logged set in a workout session.
+export type SetLog = {
+  reps: number;
+  weight: number;
+  rpe?: number;
+};
+
+// Logged exercise entry in a workout session.
+export type ExerciseLog = {
+  exerciseId: string;
+  name: string;
+  sets: SetLog[];
+  note?: string;
+  painFlag?: boolean;
+};
+
+// Workout session tracked from start to completion.
+export type WorkoutSession = {
+  id: string;
+  date: ISODate;
+  planId: string;
+  title: string;
+  startedAt: string;
+  completedAt?: string;
+  exercises: ExerciseLog[];
+  status: "in_progress" | "completed";
+};
+
+// Completed workout sessions keyed by date.
+export type WorkoutHistoryByDate = Record<ISODate, WorkoutSession>;
 
 // Summary of the last workout for progression context.
 export type LastWorkoutSummary = {

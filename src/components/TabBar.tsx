@@ -2,6 +2,7 @@
 import React from "react";
 import { View, Text, Pressable } from "react-native";
 import { colors, radius, spacing } from "../theme";
+import { textStyles } from "../ui/TextStyles";
 
 // Tab definition used by the TabBar component.
 export type TabItem = {
@@ -25,8 +26,9 @@ export function TabBar({ tabs, activeKey, onChange }: TabBarProps) {
         flexDirection: "row",
         borderTopWidth: 1,
         borderTopColor: colors.border,
-        paddingVertical: spacing.sm,
+        paddingTop: spacing.sm,
         paddingHorizontal: spacing.md,
+        paddingBottom: spacing.lg,
         backgroundColor: colors.background,
       }}
     >
@@ -48,12 +50,25 @@ export function TabBar({ tabs, activeKey, onChange }: TabBarProps) {
             <Text
               // Active tab text uses stronger contrast.
               style={{
+                ...textStyles.caption,
                 color: isActive ? colors.text : colors.muted,
                 fontWeight: isActive ? "600" : "400",
               }}
             >
               {tab.label}
             </Text>
+            {isActive ? (
+              <View
+                // Underline indicator for the active tab.
+                style={{
+                  marginTop: spacing.xs,
+                  height: 2,
+                  width: 24,
+                  borderRadius: 2,
+                  backgroundColor: colors.text,
+                }}
+              />
+            ) : null}
           </Pressable>
         );
       })}

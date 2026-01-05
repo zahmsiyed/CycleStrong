@@ -8,6 +8,10 @@ import type {
   WorkoutPlan,
 } from "../types/domain";
 
+// PRD-safe disclaimer used for all recommendation text.
+const RECOMMENDATION_DISCLAIMER =
+  "Not medical advice. Adjust based on pain and consult a professional if needed.";
+
 // Resolve the effective cycle phase (manual override wins).
 function getEffectivePhase(checkIn: CheckIn): CyclePhase {
   return checkIn.phase_override ?? checkIn.predicted_phase;
@@ -21,7 +25,10 @@ function getActiveSymptoms(checkIn: CheckIn) {
 // Detect a simple volume reduction signal from the plan.
 function hasAccessorySetReduction(plan: WorkoutPlan) {
   // For MVP we treat Hamstring Curl set reduction as a volume cut signal.
-  return plan.exercises.some((exercise) => exercise.id === "hamstring_curl" && exercise.sets < 3);
+  return plan.exercises.some((exercise) => (
+    (exercise.id === "hamstring_curl" && exercise.sets < 3) ||
+    (exercise.id === "glute_med_cable" && exercise.sets < 2)
+  ));
 }
 
 // Build a deterministic WhyExplanation from real inputs.
@@ -29,11 +36,12 @@ export function buildWhyExplanation(args: {
   checkIn: CheckIn;
   plan: WorkoutPlan;
   lastWorkout: LastWorkoutSummary;
-  completedSession?: CompletedSessionSummary;
+  completedSessionForDate?: CompletedSessionSummary;
 }): WhyExplanation {
   const { checkIn, plan, lastWorkout } = args;
-  // completedSession is intentionally handled in the UI for a separate callout.
+  // completedSessionForDate is intentionally handled in the UI for a separate callout.
   const phase = getEffectivePhase(checkIn);
+  const phaseSource = checkIn.phase_override ? "manual" : "predicted";
   const symptoms = getActiveSymptoms(checkIn);
   const hasSetReduction = hasAccessorySetReduction(plan);
 
@@ -43,21 +51,28 @@ export function buildWhyExplanation(args: {
 
   if (intensityPct < 0) {
     bullets.push(`Adjusted loads by ${intensityPct}% to match today's readiness.`);
+  } else if (intensityPct > 0) {
+    bullets.push(`Adjusted loads by +${intensityPct}% for a confident day.`);
   } else {
     bullets.push("Kept loads at baseline for a normal training day.");
   }
 
+  bullets.push(`Intensity reason: ${plan.intensity_reason}.`);
+
   if (hasSetReduction) {
-    bullets.push("Reduced one accessory set to lower total volume.");
+    bullets.push("Reduced one accessory set to keep volume manageable.");
   }
 
   if (symptoms.length) {
     bullets.push(`Symptoms noted: ${symptoms.join(", ")}.`);
   } else {
-    bullets.push(`Phase context: ${phase} (no reported symptoms).`);
+    bullets.push("No symptoms reported today.");
   }
 
-  bullets.push("If warm-up feels great, add +5 lb to the main lift.");
+  // Always reference phase source (manual vs predicted) for transparency.
+  bullets.push(`Phase: ${phase} (${phaseSource}).`);
+
+  bullets.push("If warm-up feels great, add +5 lb to the main lift (max +5 lb).");
 
   // Progression signal references last workout and today’s intent.
   const topSet = lastWorkout.top_sets[0];
@@ -76,7 +91,7 @@ export function buildWhyExplanation(args: {
     : "Standard recovery guidance applies; maintain consistent rest and tempo.";
 
   // Disclaimer is always shown.
-  const disclaimer = "Not medical advice. Consult a healthcare professional for medical concerns.";
+  const disclaimer = RECOMMENDATION_DISCLAIMER;
 
   return {
     bullets,

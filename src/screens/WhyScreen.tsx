@@ -3,8 +3,35 @@ import React, { useEffect, useState } from "react";
 import { ScrollView, Text, View, Pressable, TextInput } from "react-native";
 import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
+import { textStyles } from "../ui/TextStyles";
 import { useAppState } from "../state/AppState";
-import type { PlanFeedback } from "../types/domain";
+import type { CompletedSessionSummary, PlanFeedback, WorkoutSession } from "../types/domain";
+
+// Build a summary from a completed session for the callout.
+function buildCompletedSummary(session: WorkoutSession): CompletedSessionSummary {
+  let totalVolume = 0;
+  let totalSets = 0;
+  let rpeSum = 0;
+  let rpeCount = 0;
+
+  session.exercises.forEach((exercise) => {
+    exercise.sets.forEach((set) => {
+      totalSets += 1;
+      totalVolume += set.reps * set.weight;
+      if (typeof set.rpe === "number") {
+        rpeSum += set.rpe;
+        rpeCount += 1;
+      }
+    });
+  });
+
+  return {
+    date: session.date,
+    volume_lbs: Math.round(totalVolume),
+    sets: totalSets,
+    rpe_avg: rpeCount ? Number((rpeSum / rpeCount).toFixed(1)) : 0,
+  };
+}
 
 // Why tab screen with explanation placeholders.
 export function WhyScreen() {
@@ -13,7 +40,7 @@ export function WhyScreen() {
     selectedDate,
     whyByDate,
     planByDate,
-    historyByDate,
+    workoutHistoryByDate,
     getFeedbackForPlan,
     saveFeedback,
   } = useAppState();
@@ -26,7 +53,8 @@ export function WhyScreen() {
   const plan = planByDate[selectedDate];
   const why = whyByDate[selectedDate];
   // Resolve completed session summary for today (if exists).
-  const completedSession = historyByDate[selectedDate];
+  const completedSession = workoutHistoryByDate[selectedDate];
+  const completedSummary = completedSession ? buildCompletedSummary(completedSession) : null;
 
   // Sync local feedback state when the plan changes.
   useEffect(() => {
@@ -61,54 +89,75 @@ export function WhyScreen() {
     await saveFeedback(payload);
   }
 
+  if (!plan) {
+    return (
+      <ScrollView
+        // Empty state when no plan exists.
+        contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
+      >
+        <Text style={textStyles.title}>Why</Text>
+        <Card>
+          <Text style={textStyles.heading}>No plan yet</Text>
+          <Text style={textStyles.caption}>Generate a plan to see the reasoning.</Text>
+        </Card>
+      </ScrollView>
+    );
+  }
+
   return (
     <ScrollView
       // Scrollable container for longer explanatory content.
-      contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}
+      contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
     >
-      <Text style={{ fontSize: 28, fontWeight: "700", color: colors.text }}>
-        Why
-      </Text>
+      <Text style={textStyles.title}>Why</Text>
 
-      {completedSession ? (
+      {plan && why ? (
+        <>
+          {/* Beta observability affordance: reassure the explanation matches today’s plan. */}
+          <Text style={textStyles.caption}>Explanation matches today’s plan</Text>
+        </>
+      ) : null}
+
+      {completedSummary ? (
         <Card>
-          <Text style={{ fontWeight: "600" }}>You completed this plan</Text>
-          <Text style={{ color: colors.muted }}>
-            Volume: {completedSession.volume_lbs} lb • Sets: {completedSession.sets} • Avg RPE: {completedSession.rpe_avg}
+          <Text style={textStyles.heading}>You completed this plan</Text>
+          <Text style={textStyles.caption}>
+            Volume: {completedSummary.volume_lbs} lb • Sets: {completedSummary.sets} • Avg RPE:{" "}
+            {completedSummary.rpe_avg}
           </Text>
         </Card>
       ) : null}
 
       <Card>
-        <Text style={{ fontWeight: "600" }}>Summary bullets</Text>
+        <Text style={textStyles.heading}>Summary bullets</Text>
         {why ? (
           why.bullets.map((bullet, index) => (
-            <Text key={`${index}-${bullet}`} style={{ color: colors.muted }}>
+            <Text key={`${index}-${bullet}`} style={textStyles.caption}>
               • {bullet}
             </Text>
           ))
         ) : (
-          <Text style={{ color: colors.muted }}>• No explanation yet.</Text>
+          <Text style={textStyles.caption}>• No explanation yet.</Text>
         )}
       </Card>
 
       <Card>
-        <Text style={{ fontWeight: "600" }}>Progression signal</Text>
-        <Text style={{ color: colors.muted }}>{why?.progression_signal ?? "—"}</Text>
+        <Text style={textStyles.heading}>Progression signal</Text>
+        <Text style={textStyles.caption}>{why?.progression_signal ?? "—"}</Text>
       </Card>
 
       <Card>
-        <Text style={{ fontWeight: "600" }}>Volume adjustment</Text>
-        <Text style={{ color: colors.muted }}>{why?.volume_adjustment ?? "—"}</Text>
+        <Text style={textStyles.heading}>Volume adjustment</Text>
+        <Text style={textStyles.caption}>{why?.volume_adjustment ?? "—"}</Text>
       </Card>
 
       <Card>
-        <Text style={{ fontWeight: "600" }}>Fatigue management</Text>
-        <Text style={{ color: colors.muted }}>{why?.fatigue_management ?? "—"}</Text>
+        <Text style={textStyles.heading}>Fatigue management</Text>
+        <Text style={textStyles.caption}>{why?.fatigue_management ?? "—"}</Text>
       </Card>
 
       <Card>
-        <Text style={{ fontWeight: "600" }}>Was this plan helpful?</Text>
+        <Text style={textStyles.heading}>Was this plan helpful?</Text>
         <View style={{ flexDirection: "row", gap: spacing.sm }}>
           <Pressable
             // Thumbs up feedback selection.
@@ -123,7 +172,7 @@ export function WhyScreen() {
               backgroundColor: feedbackRating === "up" ? colors.card : "transparent",
             }}
           >
-            <Text style={{ color: colors.muted }}>👍</Text>
+            <Text style={textStyles.caption}>👍</Text>
           </Pressable>
           <Pressable
             // Thumbs down feedback selection.
@@ -138,12 +187,12 @@ export function WhyScreen() {
               backgroundColor: feedbackRating === "down" ? colors.card : "transparent",
             }}
           >
-            <Text style={{ color: colors.muted }}>👎</Text>
+            <Text style={textStyles.caption}>👎</Text>
           </Pressable>
         </View>
         {feedbackRating ? (
           <View style={{ gap: spacing.xs }}>
-            <Text style={{ color: colors.muted }}>Optional note</Text>
+            <Text style={textStyles.caption}>Optional note</Text>
             <TextInput
               // Optional note stored with feedback.
               value={feedbackNote}
@@ -170,14 +219,14 @@ export function WhyScreen() {
                 alignItems: "center",
               }}
             >
-              <Text style={{ color: colors.muted }}>Save feedback</Text>
+              <Text style={textStyles.caption}>Save feedback</Text>
             </Pressable>
           </View>
         ) : null}
       </Card>
 
-      <Text style={{ color: colors.muted, fontSize: 12 }}>
-        {why?.disclaimer ?? "Not medical advice. Consult a healthcare professional for medical concerns."}
+      <Text style={textStyles.caption}>
+        {why?.disclaimer ?? "Not medical advice. Adjust based on pain and consult a professional if needed."}
       </Text>
     </ScrollView>
   );
