@@ -140,7 +140,8 @@ export function CycleScreen() {
     };
     await upsertCheckIn(payload);
     setNeedsRegen(true);
-    console.log("Saved check-in", payload);
+    // Log a compact confirmation for the persistence loop.
+    console.log("saved checkin", payload);
   }
 
   return (

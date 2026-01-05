@@ -14,11 +14,10 @@
     "expo": "~51.0.0",
     "expo-sqlite": "~14.0.0",
     "react": "18.2.0",
-    "react-native": "0.74.1"
+    "react-native": "^0.74.5"
   },
   "devDependencies": {
     "@types/react": "~18.2.45",
-    "@types/react-native": "~0.74.0",
     "typescript": "~5.3.3"
   }
 }

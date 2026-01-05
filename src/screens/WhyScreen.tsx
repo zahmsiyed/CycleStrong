@@ -1,78 +1,29 @@
 // WhyScreen.tsx: Explanation UI wired to local planner output and feedback.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ScrollView, Text, View, Pressable, TextInput } from "react-native";
 import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
 import { useAppState } from "../state/AppState";
-import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
-import { buildWhyExplanation } from "../why/whyGenerator";
-import type { CheckIn, PlanFeedback } from "../types/domain";
+import type { PlanFeedback } from "../types/domain";
 
 // Why tab screen with explanation placeholders.
 export function WhyScreen() {
   // Pull planner state and persistence actions from the app context.
   const {
-    checkInByDate,
     selectedDate,
     whyByDate,
     planByDate,
-    lastWorkout,
     historyByDate,
     getFeedbackForPlan,
     saveFeedback,
-    setPlan,
-    setWhy,
   } = useAppState();
 
   // Local feedback state bound to the selected plan version.
   const [feedbackRating, setFeedbackRating] = useState<PlanFeedback["rating"] | null>(null);
   const [feedbackNote, setFeedbackNote] = useState<string>("");
 
-  // Build a safe check-in fallback for planner input.
-  const todayCheckIn = useMemo<CheckIn>(() => {
-    return (
-      checkInByDate[selectedDate] ?? {
-        date: selectedDate,
-        predicted_phase: "unknown",
-        symptoms: ["none"],
-      }
-    );
-  }, [checkInByDate, selectedDate]);
-
-  // Resolve the plan to use for why generation.
+  // Resolve the plan and why to use for rendering (generated in WorkoutScreen).
   const plan = planByDate[selectedDate];
-
-  // Generate plan + why if missing (and keep why in sync with plan id).
-  useEffect(() => {
-    if (!lastWorkout) {
-      return;
-    }
-    if (!plan) {
-      // Build a new plan version if none exists.
-      const nextId = getPlanVersionId(selectedDate, undefined, false);
-      const result = buildLocalPlan({ checkIn: todayCheckIn, lastWorkout, planId: nextId });
-      setPlan(selectedDate, result.plan);
-      // Build why from real plan + inputs.
-      const why = buildWhyExplanation({
-        checkIn: todayCheckIn,
-        plan: result.plan,
-        lastWorkout,
-        completedSession: historyByDate[selectedDate],
-      });
-      setWhy(selectedDate, why);
-      return;
-    }
-    // Rebuild why whenever plan or check-in changes for this date.
-    const why = buildWhyExplanation({
-      checkIn: todayCheckIn,
-      plan,
-      lastWorkout,
-      completedSession: historyByDate[selectedDate],
-    });
-    setWhy(selectedDate, why);
-  }, [lastWorkout, plan, selectedDate, todayCheckIn, historyByDate, setPlan, setWhy]);
-
-  // Resolve the explanation to render (if generated yet).
   const why = whyByDate[selectedDate];
   // Resolve completed session summary for today (if exists).
   const completedSession = historyByDate[selectedDate];
@@ -123,8 +74,7 @@ export function WhyScreen() {
         <Card>
           <Text style={{ fontWeight: "600" }}>You completed this plan</Text>
           <Text style={{ color: colors.muted }}>
-            Volume: {completedSession.volume_lbs} lb • Sets: {completedSession.sets} • Avg RPE:{" "}
-            {completedSession.rpe_avg}
+            Volume: {completedSession.volume_lbs} lb • Sets: {completedSession.sets} • Avg RPE: {completedSession.rpe_avg}
           </Text>
         </Card>
       ) : null}

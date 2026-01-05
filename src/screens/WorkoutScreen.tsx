@@ -15,7 +15,9 @@ export function WorkoutScreen() {
     checkInByDate,
     selectedDate,
     needsRegen,
+    hydrated,
     planByDate,
+    whyByDate,
     lastWorkout,
     historyByDate,
     setPlan,
@@ -49,7 +51,8 @@ export function WorkoutScreen() {
 
   // Generate a plan when missing or when regeneration is requested.
   useEffect(() => {
-    if (!lastWorkout) {
+    // Avoid generation until hydration completes to prevent overwriting persisted data.
+    if (!hydrated || !lastWorkout) {
       return;
     }
     const existing = planByDate[selectedDate];
@@ -67,8 +70,10 @@ export function WorkoutScreen() {
       setPlan(selectedDate, result.plan);
       setWhy(selectedDate, why);
       setNeedsRegen(false);
+      console.log("generated plan", result.plan.id);
     }
   }, [
+    hydrated,
     lastWorkout,
     planByDate,
     needsRegen,
@@ -82,6 +87,8 @@ export function WorkoutScreen() {
 
   // Resolve the plan to render (if generated yet).
   const plan = planByDate[selectedDate];
+  // Track whether a check-in exists for the selected date.
+  const hasCheckIn = Boolean(checkInByDate[selectedDate]);
 
   // Helper to parse numeric input while keeping draft text.
   function parseNumber(value: string, fallback: number) {
@@ -439,6 +446,14 @@ export function WorkoutScreen() {
           <Text style={{ fontWeight: "600" }}>Regenerate</Text>
         </Pressable>
       </View>
+
+      {/* Minimal debug line to validate hydration and persistence. */}
+      <Text style={{ color: colors.muted, fontSize: 12 }}>
+        Hydrated: {hydrated ? "true" : "false"} | needsRegen: {needsRegen ? "true" : "false"}
+      </Text>
+      <Text style={{ color: colors.muted, fontSize: 12 }}>
+        HasCheckIn: {hasCheckIn ? "yes" : "no"} | HasPlan: {plan ? "yes" : "no"} | HasWhy: {whyByDate[selectedDate] ? "yes" : "no"}
+      </Text>
     </ScrollView>
   );
 }

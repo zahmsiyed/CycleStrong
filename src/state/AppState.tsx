@@ -16,6 +16,7 @@ type AppState = {
   checkInByDate: Record<ISODate, CheckIn>;
   selectedDate: ISODate;
   needsRegen: boolean;
+  hydrated: boolean;
   lastWorkout: LastWorkoutSummary | null;
   planByDate: Record<ISODate, WorkoutPlan>;
   whyByDate: Record<ISODate, WhyExplanation>;
@@ -64,7 +65,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Track the active date used by the Cycle screen.
   const [selectedDate, setSelectedDate] = useState<ISODate>(getTodayISODate());
   // Flag used to indicate downstream regeneration needs.
+  // This is kept in-memory only to avoid stale regeneration on relaunch.
   const [needsRegen, setNeedsRegen] = useState<boolean>(false);
+  // Track when hydration is complete to avoid generating before data loads.
+  const [hydrated, setHydrated] = useState<boolean>(false);
   // Store the most recent workout summary for planner context.
   const [lastWorkout, setLastWorkoutState] = useState<LastWorkoutSummary | null>(null);
   // Store workout plans by date.
@@ -80,43 +84,53 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   // Load persisted check-ins and plans from SQLite on startup.
   const loadPersistedState = useCallback(async () => {
-    const storedCheckIns = (await loadCheckInByDate()) as Record<ISODate, CheckIn>;
-    const storedPlans = await loadJsonByKey<Record<ISODate, WorkoutPlan>>("planByDate", {});
-    const storedWhy = await loadJsonByKey<Record<ISODate, WhyExplanation>>("whyByDate", {});
-    const storedLastWorkout = await loadJsonByKey<LastWorkoutSummary | null>("lastWorkout", null);
-    const storedHistory = await loadJsonByKey<Record<ISODate, CompletedSessionSummary>>(
-      "historyByDate",
-      {},
-    );
-    const storedFeedback = await loadJsonByKey<Record<string, PlanFeedback>>(
-      "feedbackByPlanId",
-      {},
-    );
+    try {
+      const storedCheckIns = (await loadCheckInByDate()) as Record<ISODate, CheckIn>;
+      const storedPlans = await loadJsonByKey<Record<ISODate, WorkoutPlan>>("planByDate", {});
+      const storedWhy = await loadJsonByKey<Record<ISODate, WhyExplanation>>("whyByDate", {});
+      const storedLastWorkout = await loadJsonByKey<LastWorkoutSummary | null>(
+        "lastWorkout",
+        null,
+      );
+      const storedHistory = await loadJsonByKey<Record<ISODate, CompletedSessionSummary>>(
+        "historyByDate",
+        {},
+      );
+      const storedFeedback = await loadJsonByKey<Record<string, PlanFeedback>>(
+        "feedbackByPlanId",
+        {},
+      );
 
-    setCheckInByDate(storedCheckIns ?? {});
-    setPlanByDate(storedPlans ?? {});
-    setWhyByDate(storedWhy ?? {});
-    setHistoryByDateState(storedHistory ?? {});
-    setFeedbackByPlanId(storedFeedback ?? {});
+      setCheckInByDate(storedCheckIns ?? {});
+      setPlanByDate(storedPlans ?? {});
+      setWhyByDate(storedWhy ?? {});
+      setHistoryByDateState(storedHistory ?? {});
+      setFeedbackByPlanId(storedFeedback ?? {});
 
-    // Seed a default last workout summary if none exists.
-    if (storedLastWorkout) {
-      setLastWorkoutState(storedLastWorkout);
-    } else {
-      const seeded = getDefaultLastWorkout();
-      setLastWorkoutState(seeded);
-      await saveJsonByKey("lastWorkout", seeded);
+      // Seed a default last workout summary if none exists.
+      if (storedLastWorkout) {
+        setLastWorkoutState(storedLastWorkout);
+      } else {
+        const seeded = getDefaultLastWorkout();
+        setLastWorkoutState(seeded);
+        await saveJsonByKey("lastWorkout", seeded);
+      }
+    } finally {
+      // Mark hydration complete even if some reads fail.
+      setHydrated(true);
     }
   }, []);
 
   // Insert or update a check-in and persist the full map.
   const upsertCheckIn = useCallback(async (checkIn: CheckIn) => {
     // Use functional updates to keep the callback stable.
+    let nextState: Record<ISODate, CheckIn> = {};
     setCheckInByDate((prev) => {
-      const next = { ...prev, [checkIn.date]: checkIn };
-      saveCheckInByDate(next);
-      return next;
+      nextState = { ...prev, [checkIn.date]: checkIn };
+      return nextState;
     });
+    // Persist after state update to keep async storage consistent.
+    await saveCheckInByDate(nextState);
   }, []);
 
   // Persist the last workout summary and update state.
@@ -128,21 +142,25 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Persist the workout plan for a specific date.
   const setPlan = useCallback(async (date: ISODate, plan: WorkoutPlan) => {
     // Use functional updates to keep the callback stable.
+    let nextState: Record<ISODate, WorkoutPlan> = {};
     setPlanByDate((prev) => {
-      const next = { ...prev, [date]: plan };
-      saveJsonByKey("planByDate", next);
-      return next;
+      nextState = { ...prev, [date]: plan };
+      return nextState;
     });
+    // Persist after state update to keep async storage consistent.
+    await saveJsonByKey("planByDate", nextState);
   }, []);
 
   // Persist the why explanation for a specific date.
   const setWhy = useCallback(async (date: ISODate, why: WhyExplanation) => {
     // Use functional updates to keep the callback stable.
+    let nextState: Record<ISODate, WhyExplanation> = {};
     setWhyByDate((prev) => {
-      const next = { ...prev, [date]: why };
-      saveJsonByKey("whyByDate", next);
-      return next;
+      nextState = { ...prev, [date]: why };
+      return nextState;
     });
+    // Persist after state update to keep async storage consistent.
+    await saveJsonByKey("whyByDate", nextState);
   }, []);
 
   // Persist the completed workout history map.
@@ -165,11 +183,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Persist plan feedback keyed by planId for version-specific notes.
   const saveFeedback = useCallback(async (feedback: PlanFeedback) => {
     // Persist feedback by planId to keep versioned notes intact.
+    let nextState: Record<string, PlanFeedback> = {};
     setFeedbackByPlanId((prev) => {
-      const next = { ...prev, [feedback.planId]: feedback };
-      saveJsonByKey("feedbackByPlanId", next);
-      return next;
+      nextState = { ...prev, [feedback.planId]: feedback };
+      return nextState;
     });
+    // Persist after state update to keep async storage consistent.
+    await saveJsonByKey("feedbackByPlanId", nextState);
   }, []);
 
   // Memoize the context value to avoid extra re-renders.
@@ -178,6 +198,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       checkInByDate,
       selectedDate,
       needsRegen,
+      hydrated,
       lastWorkout,
       planByDate,
       whyByDate,
@@ -198,18 +219,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       checkInByDate,
       selectedDate,
       needsRegen,
+      hydrated,
       lastWorkout,
       planByDate,
       whyByDate,
       historyByDate,
       feedbackByPlanId,
       upsertCheckIn,
-      setPlan,
-      setWhy,
-      setLastWorkout,
-      setHistoryByDate,
       getFeedbackForPlan,
-      saveFeedback,
       loadPersistedState,
     ],
   );

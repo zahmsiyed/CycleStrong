@@ -1,70 +1,79 @@
-// sqlite.ts: Minimal SQLite helper for persisting app state as JSON.
+// sqlite.ts: Async SQLite helper for Expo SDK 51+ using the new API.
 import * as SQLite from "expo-sqlite";
 
 // Database name for local-only app data.
 const DB_NAME = "cyclestrong.db";
-const db = SQLite.openDatabase(DB_NAME);
 
-// Parameter type for SQL queries.
-type SqlParams = Array<string | number | null>;
+// Cache the async database open so we avoid reopening per call.
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-// Execute a SQL statement and resolve the result.
-function executeSql(sql: string, params: SqlParams = []) {
-  return new Promise<SQLite.SQLResultSet>((resolve, reject) => {
-    db.transaction(
-      (tx) => {
-        tx.executeSql(
-          sql,
-          params,
-          (_, result) => resolve(result),
-          (_, error) => {
-            reject(error);
-            return false;
-          },
-        );
-      },
-      (error) => reject(error),
-    );
-  });
+// Open the database using the SDK 51 async API (no top-level init).
+export async function getDb() {
+  if (!dbPromise) {
+    // SDK 51+ requires openDatabaseAsync; openDatabase is not available.
+    dbPromise = SQLite.openDatabaseAsync(DB_NAME);
+  }
+  return dbPromise;
 }
 
 // Initialize the key-value table for app state persistence.
-async function initDb() {
-  await executeSql(
-    "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);",
+export async function initDb() {
+  const db = await getDb();
+  // Enable WAL for better concurrency on mobile.
+  await db.execAsync("PRAGMA journal_mode=WAL;");
+  // Create a simple key-value table if it does not exist.
+  await db.execAsync(
+    "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL);",
   );
+  // Migrate older installs that created kv without updated_at.
+  const columns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(kv);");
+  const hasUpdatedAt = columns.some((column) => column.name === "updated_at");
+  if (!hasUpdatedAt) {
+    // Default value avoids NOT NULL issues on existing rows.
+    await db.execAsync("ALTER TABLE kv ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';");
+  }
 }
 
-// Read a value from the key-value table.
-async function getItem(key: string) {
+// Read JSON data from the key-value table.
+export async function kvGet<T>(key: string): Promise<T | null> {
   await initDb();
-  const result = await executeSql("SELECT value FROM kv WHERE key = ?;", [key]);
-  const row = result.rows.item(0) as { value?: string } | undefined;
-  return row?.value ?? null;
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv WHERE key = ?;", [
+    key,
+  ]);
+  if (!row?.value) {
+    return null;
+  }
+  try {
+    return JSON.parse(row.value) as T;
+  } catch {
+    return null;
+  }
 }
 
-// Write a value to the key-value table.
-async function setItem(key: string, value: string) {
+// Write JSON data into the key-value table.
+export async function kvSet<T>(key: string, value: T): Promise<void> {
   await initDb();
-  await executeSql("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?);", [key, value]);
+  const db = await getDb();
+  // Store JSON with a timestamp to simplify debugging and migrations.
+  const updatedAt = new Date().toISOString();
+  await db.runAsync("INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?);", [
+    key,
+    JSON.stringify(value),
+    updatedAt,
+  ]);
 }
 
 // Persist JSON data for an arbitrary key.
 export async function saveJsonByKey(key: string, payload: unknown) {
-  await setItem(key, JSON.stringify(payload));
+  // Serialize JSON explicitly to keep storage consistent.
+  await kvSet(key, payload);
 }
 
 // Load JSON data for an arbitrary key (or return a fallback).
 export async function loadJsonByKey<T>(key: string, fallback: T) {
-  const raw = await getItem(key);
-  if (!raw) {
-    return fallback;
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
+  const data = await kvGet<T>(key);
+  return data ?? fallback;
 }
 
 // Persist the entire check-in map as JSON in SQLite.
