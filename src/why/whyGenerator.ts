@@ -49,7 +49,7 @@ export function buildWhyExplanation(args: {
   const bullets: string[] = [];
   const intensityPct = plan.intensity_adjustment_pct;
 
-  if (intensityPct < 0) {
+  if (intensityPct < 0) {``
     bullets.push(`Adjusted loads by ${intensityPct}% to match today's readiness.`);
   } else if (intensityPct > 0) {
     bullets.push(`Adjusted loads by +${intensityPct}% for a confident day.`);

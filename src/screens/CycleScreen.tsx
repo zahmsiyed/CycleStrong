@@ -1,6 +1,7 @@
 // CycleScreen.tsx: Cycle check-in UI with local persistence via AppState.
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, Text, View, Pressable, TextInput } from "react-native";
+import { ScrollView, Text, View, Pressable, TextInput, Modal, Platform } from "react-native";
+import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
 import { textStyles } from "../ui/TextStyles";
@@ -32,6 +33,10 @@ export function CycleScreen() {
   const [showUpdatedNotice, setShowUpdatedNotice] = useState<boolean>(false);
   // Track the timeout so we can clean it up between updates.
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Local UI state for the date picker modal (beta-safe UX affordance).
+  const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
+  // Local draft date while the iOS inline picker is open.
+  const [pickerDraftDate, setPickerDraftDate] = useState<Date | null>(null);
 
   // Rebuild the draft whenever the selected date or stored data changes.
   useEffect(() => {
@@ -61,8 +66,8 @@ export function CycleScreen() {
     return Math.min(max, Math.max(min, value));
   }
 
-  // Helper for optional numeric inputs with clamping.
-  function parseClampedNumber(value: string, min: number, max: number) {
+  // Helper for optional numeric inputs without clamping (clamp on blur/save instead).
+  function parseOptionalNumber(value: string) {
     if (!value.trim()) {
       return undefined;
     }
@@ -70,7 +75,7 @@ export function CycleScreen() {
     if (Number.isNaN(numberValue)) {
       return undefined;
     }
-    return clampNumber(numberValue, min, max);
+    return numberValue;
   }
 
   // Helper to parse an ISO date string safely.
@@ -80,6 +85,37 @@ export function CycleScreen() {
     }
     const date = new Date(`${dateString}T00:00:00`);
     return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  // Format an ISO date for display in the row (no Date objects in AppState).
+  function formatDateForDisplay(iso?: string) {
+    const parsed = parseISODate(iso);
+    if (!parsed) {
+      return "Select date";
+    }
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    return `${months[parsed.getMonth()]} ${parsed.getDate()}, ${parsed.getFullYear()}`;
+  }
+
+  // Convert a Date object to YYYY-MM-DD for storage.
+  function toISODateString(date: Date) {
+    const year = date.getFullYear();
+    const month = `${date.getMonth() + 1}`.padStart(2, "0");
+    const day = `${date.getDate()}`.padStart(2, "0");
+    return `${year}-${month}-${day}`;
   }
 
   // Inline validation for last period start input.
@@ -162,12 +198,64 @@ export function CycleScreen() {
     });
   }
 
+  // Open the date picker modal and seed the draft date.
+  function openDatePicker() {
+    // We keep Date objects local to the picker UI only.
+    const parsed = parseISODate(draft.last_period_start);
+    setPickerDraftDate(parsed ?? new Date());
+    setShowDatePicker(true);
+  }
+
+  // Close the date picker without persisting changes.
+  function closeDatePicker() {
+    setShowDatePicker(false);
+  }
+
+  // Commit the currently selected picker date to the draft state.
+  function commitDatePickerSelection(date: Date | null) {
+    if (!date) {
+      return;
+    }
+    // Prevent future dates because cycle calculations assume a past start.
+    const safeDate = date > new Date() ? new Date() : date;
+    setDraft((prev) => ({
+      ...prev,
+      last_period_start: toISODateString(safeDate),
+    }));
+  }
+
+  // Handle picker changes per-platform for a safe modal UX.
+  function handleDateChange(event: DateTimePickerEvent, selected?: Date) {
+    if (Platform.OS === "android") {
+      // Android returns "dismissed" when canceling the native dialog.
+      if (event.type === "dismissed") {
+        setShowDatePicker(false);
+        return;
+      }
+      commitDatePickerSelection(selected ?? null);
+      setShowDatePicker(false);
+      return;
+    }
+    // iOS inline picker keeps the modal open; update draft only.
+    if (selected) {
+      setPickerDraftDate(selected);
+    }
+  }
+
   // Save the check-in, mark regen as needed.
   async function handleUpdate() {
     // Persist predicted values into the stored check-in for planner use.
+    const clampedCycleLength =
+      draft.cycle_length !== undefined ? clampNumber(draft.cycle_length, 20, 40) : undefined;
+    const clampedBleedDays =
+      draft.typical_bleed_days !== undefined
+        ? clampNumber(draft.typical_bleed_days, 2, 10)
+        : undefined;
     const payload: CheckIn = {
       ...draft,
       date: selectedDate,
+      cycle_length: clampedCycleLength,
+      typical_bleed_days: clampedBleedDays,
       cycle_day: predictedDay ?? undefined,
       predicted_phase: predictedPhase ?? "unknown",
     };
@@ -267,20 +355,19 @@ export function CycleScreen() {
         ) : null}
         <View style={{ gap: spacing.sm }}>
           <View style={{ gap: spacing.xs }}>
-            <Text style={textStyles.caption}>Last period start (YYYY-MM-DD)</Text>
-            <TextInput
-              // Text input for ISO date.
-              value={draft.last_period_start ?? ""}
-              onChangeText={(value) => setDraft((prev) => ({ ...prev, last_period_start: value }))}
-              placeholder="YYYY-MM-DD"
-              autoCapitalize="none"
+            <Text style={textStyles.caption}>Last period start</Text>
+            <Pressable
+              // Pressable row opens a small modal calendar picker.
+              onPress={openDatePicker}
               style={{
                 borderWidth: 1,
                 borderColor: colors.border,
                 padding: spacing.sm,
                 borderRadius: 10,
               }}
-            />
+            >
+              <Text style={textStyles.body}>{formatDateForDisplay(draft.last_period_start)}</Text>
+            </Pressable>
             {lastPeriodError ? (
               <Text style={{ color: "#B00020", fontSize: 12 }}>{lastPeriodError}</Text>
             ) : null}
@@ -288,12 +375,21 @@ export function CycleScreen() {
           <View style={{ gap: spacing.xs }}>
             <Text style={textStyles.caption}>Cycle length</Text>
             <TextInput
-              // Numeric input for cycle length (clamped to 20-40 days).
+              // Numeric input for cycle length (clamp on blur to avoid auto-jumps while typing).
               value={draft.cycle_length?.toString() ?? ""}
               onChangeText={(value) =>
                 setDraft((prev) => ({
                   ...prev,
-                  cycle_length: parseClampedNumber(value, 20, 40),
+                  cycle_length: parseOptionalNumber(value),
+                }))
+              }
+              onBlur={() =>
+                setDraft((prev) => ({
+                  ...prev,
+                  cycle_length:
+                    prev.cycle_length !== undefined
+                      ? clampNumber(prev.cycle_length, 20, 40)
+                      : undefined,
                 }))
               }
               keyboardType="number-pad"
@@ -309,12 +405,21 @@ export function CycleScreen() {
           <View style={{ gap: spacing.xs }}>
             <Text style={textStyles.caption}>Typical bleed days</Text>
             <TextInput
-              // Numeric input for typical bleed days (clamped to 2-10 days).
+              // Numeric input for typical bleed days (clamp on blur to avoid auto-jumps while typing).
               value={draft.typical_bleed_days?.toString() ?? ""}
               onChangeText={(value) =>
                 setDraft((prev) => ({
                   ...prev,
-                  typical_bleed_days: parseClampedNumber(value, 2, 10),
+                  typical_bleed_days: parseOptionalNumber(value),
+                }))
+              }
+              onBlur={() =>
+                setDraft((prev) => ({
+                  ...prev,
+                  typical_bleed_days:
+                    prev.typical_bleed_days !== undefined
+                      ? clampNumber(prev.typical_bleed_days, 2, 10)
+                      : undefined,
                 }))
               }
               keyboardType="number-pad"
@@ -401,6 +506,58 @@ export function CycleScreen() {
           </Text>
         </Pressable>
       </Card>
+
+      <Modal
+        // Lightweight modal calendar picker to avoid error-prone text input.
+        transparent
+        animationType="fade"
+        visible={showDatePicker}
+        onRequestClose={closeDatePicker}
+      >
+        <View
+          // Simple dim backdrop for a "popup" feel.
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.3)",
+            justifyContent: "center",
+            padding: spacing.md,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: colors.background,
+              borderRadius: 16,
+              padding: spacing.md,
+              gap: spacing.sm,
+            }}
+          >
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              <Pressable onPress={closeDatePicker}>
+                <Text style={textStyles.caption}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                // iOS requires an explicit "Done" to commit the inline selection.
+                onPress={() => {
+                  commitDatePickerSelection(pickerDraftDate);
+                  closeDatePicker();
+                }}
+              >
+                <Text style={textStyles.caption}>Done</Text>
+              </Pressable>
+            </View>
+            {showDatePicker ? (
+              <DateTimePicker
+                // Calendar picker: keeps logic local and stores ISO string in state.
+                value={pickerDraftDate ?? new Date()}
+                mode="date"
+                display={Platform.OS === "ios" ? "inline" : "calendar"}
+                onChange={handleDateChange}
+                maximumDate={new Date()}
+              />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
