@@ -4,6 +4,7 @@ import { ScrollView, Text, View, Pressable, TextInput } from "react-native";
 import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
 import { textStyles } from "../ui/TextStyles";
+import { formatOverviewPrescription } from "../utils/format";
 import { useAppState } from "../state/AppState";
 import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
 import { buildWhyExplanation } from "../why/whyGenerator";
@@ -464,38 +465,72 @@ export function WorkoutScreen() {
                 <View key={`${exercise.exerciseId}-set-${index}`} style={{ gap: spacing.xs }}>
                   <Text style={textStyles.caption}>Set {index + 1}</Text>
                   <View style={{ flexDirection: "row", gap: spacing.sm }}>
-                    <TextInput
-                      // Autosave reps input.
-                      value={String(set.reps)}
-                      onChangeText={(value) =>
-                        updateSessionSet(exercise.exerciseId, index, "reps", value)
-                      }
-                      keyboardType="number-pad"
-                      placeholder="Reps"
-                      style={{
-                        flex: 1,
-                        borderWidth: 1,
-                        borderColor: colors.border,
-                        padding: spacing.xs,
-                        borderRadius: 8,
-                      }}
-                    />
-                    <TextInput
-                      // Autosave weight input.
-                      value={String(set.weight)}
-                      onChangeText={(value) =>
-                        updateSessionSet(exercise.exerciseId, index, "weight", value)
-                      }
-                      keyboardType="number-pad"
-                      placeholder="Weight"
-                      style={{
-                        flex: 1,
-                        borderWidth: 1,
-                        borderColor: colors.border,
-                        padding: spacing.xs,
-                        borderRadius: 8,
-                      }}
-                    />
+                    <View
+                      // Weight input wrapper with a persistent unit label.
+                      style={{ flex: 1, position: "relative" }}
+                    >
+                      <TextInput
+                        // Autosave weight input.
+                        value={String(set.weight)}
+                        onChangeText={(value) =>
+                          updateSessionSet(exercise.exerciseId, index, "weight", value)
+                        }
+                        keyboardType="number-pad"
+                        placeholder="Weight"
+                        style={{
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                          padding: spacing.xs,
+                          paddingRight: 36,
+                          borderRadius: 8,
+                        }}
+                      />
+                      <Text
+                        // Unit label stays visible while typing.
+                        style={{
+                          ...textStyles.caption,
+                          position: "absolute",
+                          right: 8,
+                          top: "50%",
+                          marginTop: -8,
+                        }}
+                      >
+                        lbs
+                      </Text>
+                    </View>
+                    <View
+                      // Reps input wrapper with a persistent unit label.
+                      style={{ flex: 1, position: "relative" }}
+                    >
+                      <TextInput
+                        // Autosave reps input.
+                        value={String(set.reps)}
+                        onChangeText={(value) =>
+                          updateSessionSet(exercise.exerciseId, index, "reps", value)
+                        }
+                        keyboardType="number-pad"
+                        placeholder="Reps"
+                        style={{
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                          padding: spacing.xs,
+                          paddingRight: 36,
+                          borderRadius: 8,
+                        }}
+                      />
+                      <Text
+                        // Unit label stays visible while typing.
+                        style={{
+                          ...textStyles.caption,
+                          position: "absolute",
+                          right: 8,
+                          top: "50%",
+                          marginTop: -8,
+                        }}
+                      >
+                        reps
+                      </Text>
+                    </View>
                     <TextInput
                       // Autosave optional RPE input.
                       value={set.rpe === undefined ? "" : String(set.rpe)}
@@ -606,7 +641,7 @@ export function WorkoutScreen() {
                   <View style={{ flex: 1, gap: spacing.xs }}>
                     <Text style={textStyles.body}>{exercise.name}</Text>
                     <Text style={textStyles.caption}>
-                      {exercise.sets}x{exercise.reps} @ {exercise.weight}
+                      {formatOverviewPrescription(exercise.sets, exercise.reps, exercise.weight)}
                     </Text>
                   </View>
                   <Pressable

@@ -5,6 +5,7 @@ import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
 import { textStyles } from "../ui/TextStyles";
 import { useAppState } from "../state/AppState";
+import { formatSummarySet } from "../utils/format";
 import type { WorkoutSession } from "../types/domain";
 
 // Build a quick summary from a completed session.
@@ -129,7 +130,7 @@ export function PreviousScreen({ onNavigateToWorkout }: PreviousScreenProps) {
                   <Text style={textStyles.body}>{exercise.name}</Text>
                   {exercise.sets.map((set, index) => (
                     <Text key={`${exercise.exerciseId}-${index}`} style={textStyles.caption}>
-                      Set {index + 1}: {set.reps} @ {set.weight}
+                      Set {index + 1}: {formatSummarySet(set.weight, set.reps)}
                     </Text>
                   ))}
                 </View>

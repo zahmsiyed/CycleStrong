@@ -10,6 +10,7 @@ import {
 import { ENABLE_DEMO_DATA } from "../config";
 import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
 import { buildWhyExplanation } from "../why/whyGenerator";
+import { formatSummarySet } from "../utils/format";
 import type {
   CheckIn,
   CompletedSessionSummary,
@@ -67,8 +68,8 @@ function getDefaultLastWorkout(): LastWorkoutSummary {
     date_label: "2024-01-08",
     name: "Lower A",
     top_sets: [
-      { exercise: "Back Squat", prescription: "3x5 @ 185", note: "solid" },
-      { exercise: "Romanian Deadlift", prescription: "3x6 @ 135" },
+      { exercise: "Back Squat", prescription: formatSummarySet(175, 5), note: "solid" },
+      { exercise: "Romanian Deadlift", prescription: formatSummarySet(175, 5) },
     ],
     volume_lbs: 12500,
     rpe_avg: 7.5,
@@ -88,9 +89,9 @@ function getDemoLastWorkout(): LastWorkoutSummary {
     date_label: "2024-02-12",
     name: "Glutes + Hamstrings",
     top_sets: [
-      { exercise: "Hip Thrust", prescription: "8 @ 185" },
-      { exercise: "Romanian Deadlift", prescription: "6 @ 135" },
-      { exercise: "Leg Press", prescription: "10 @ 250" },
+      { exercise: "Hip Thrust", prescription: formatSummarySet(175, 5) },
+      { exercise: "Romanian Deadlift", prescription: formatSummarySet(175, 5) },
+      { exercise: "Leg Press", prescription: formatSummarySet(175, 5) },
     ],
     volume_lbs: 14250,
     rpe_avg: 7.2,
@@ -152,22 +153,24 @@ function buildCompletedSummary(session: WorkoutSession): CompletedSessionSummary
 
 // Build a LastWorkoutSummary based on a completed session.
 function buildLastWorkoutSummary(session: WorkoutSession): LastWorkoutSummary {
-  // Flatten sets so we can pick top sets by volume.
-  const allSets: Array<{ exercise: string; reps: number; weight: number; volume: number }> = [];
-  session.exercises.forEach((exercise) => {
-    exercise.sets.forEach((set) => {
-      const volume = set.reps * set.weight;
-      allSets.push({ exercise: exercise.name, reps: set.reps, weight: set.weight, volume });
-    });
-  });
-  // Sort descending by volume and take the top 3.
-  const topSets = allSets
-    .sort((a, b) => b.volume - a.volume)
-    .slice(0, 3)
-    .map((set) => ({
-      exercise: set.exercise,
-      prescription: `${set.reps} @ ${set.weight}`,
-    }));
+  // Pick the single top set per exercise (highest reps * weight) for summary clarity.
+  const topSets = session.exercises
+    .map((exercise) => {
+      const topSet = exercise.sets.reduce((best, set) => {
+        const volume = set.reps * set.weight;
+        return !best || volume > best.volume ? { reps: set.reps, weight: set.weight, volume } : best;
+      }, null as null | { reps: number; weight: number; volume: number });
+
+      if (!topSet) {
+        return null;
+      }
+
+      return {
+        exercise: exercise.name,
+        prescription: formatSummarySet(topSet.weight, topSet.reps),
+      };
+    })
+    .filter((item): item is { exercise: string; prescription: string } => Boolean(item));
 
   const summary = buildCompletedSummary(session);
 
