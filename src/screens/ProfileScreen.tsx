@@ -25,7 +25,7 @@ function summarizeSession(session: WorkoutSession) {
         return null;
       }
 
-      return formatSummarySet(topSet.weight, topSet.reps);
+      return `${exercise.name}: ${formatSummarySet(topSet.weight, topSet.reps)}`;
     })
     .filter((label): label is string => Boolean(label));
 
