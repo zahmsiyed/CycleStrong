@@ -204,6 +204,23 @@ export async function listExercises(filters: ExerciseFilters = {}): Promise<Exer
   return rows.map(mapRow);
 }
 
+// Fetch a map of exercises by id for quick lookup.
+export async function listExercisesByIds(ids: string[]): Promise<Record<string, Exercise>> {
+  await initExercisesSchema();
+  if (!ids.length) {
+    return {};
+  }
+  const db = await getDb();
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = await db.getAllAsync(`SELECT * FROM exercises WHERE id IN (${placeholders});`, ids);
+  const map: Record<string, Exercise> = {};
+  rows.forEach((row: any) => {
+    const exercise = mapRow(row);
+    map[exercise.id] = exercise;
+  });
+  return map;
+}
+
 // Fetch a single exercise by id.
 export async function getExerciseById(id: string): Promise<Exercise | null> {
   await initExercisesSchema();

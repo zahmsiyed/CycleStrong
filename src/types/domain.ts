@@ -24,14 +24,13 @@ export type CheckIn = {
 
 // Individual exercise plan for a workout.
 export type ExercisePlan = {
-  id: string;
-  name: string;
+  // Exercise id is resolved via SQLite for display names.
+  exerciseId: string;
   sets: number;
   reps: number;
-  weight: number;
-  alternatives?: string[];
-  // Optional original name stored when swapping exercises.
-  original_name?: string;
+  weight_lbs: number;
+  // Flag used to keep cardio items out of strength adjustments.
+  isCardio?: boolean;
 };
 
 // Structured workout plan created by the local planner.
@@ -40,6 +39,8 @@ export type WorkoutPlan = {
   date: ISODate;
   // Timestamp for plan freshness UI in the beta build.
   generatedAt?: string;
+  // Template key used to keep dropdown selection aligned with the plan.
+  template_key?: string;
   title: string;
   duration_min: number;
   equipment: string;
@@ -76,8 +77,8 @@ export type WorkoutSession = {
   status: "in_progress" | "completed";
 };
 
-// Completed workout sessions keyed by date.
-export type WorkoutHistoryByDate = Record<ISODate, WorkoutSession>;
+// Completed workout sessions keyed by session id (allows multiple per date).
+export type WorkoutHistoryByDate = Record<string, WorkoutSession>;
 
 // Summary of the last workout for progression context.
 export type LastWorkoutSummary = {

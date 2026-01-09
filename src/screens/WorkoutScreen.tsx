@@ -1,12 +1,14 @@
 // WorkoutScreen.tsx: Workout UI with plan view and session logging view.
 import React, { useEffect, useMemo, useState } from "react";
-import { ScrollView, Text, View, Pressable, TextInput } from "react-native";
+import { ScrollView, Text, View, Pressable, TextInput, Modal } from "react-native";
 import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
 import { textStyles } from "../ui/TextStyles";
 import { formatOverviewPrescription } from "../utils/format";
 import { useAppState } from "../state/AppState";
+import { listExercisesByIds } from "../db/exercises";
 import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
+import { getTemplateByKey, WORKOUT_TEMPLATES } from "../planner/workoutTemplates";
 import { buildWhyExplanation } from "../why/whyGenerator";
 import type {
   CheckIn,
@@ -17,6 +19,10 @@ import type {
   WorkoutPlan,
   WorkoutSession,
 } from "../types/domain";
+import type { Exercise } from "../types/exercise";
+
+// Template key union used by the dropdown selector.
+type TemplateKey = (typeof WORKOUT_TEMPLATES)[number]["key"];
 
 // Build a summary from a completed session for the Why screen.
 function buildCompletedSummary(session: WorkoutSession): CompletedSessionSummary {
@@ -44,6 +50,15 @@ function buildCompletedSummary(session: WorkoutSession): CompletedSessionSummary
   };
 }
 
+// Find the most recent completed session for a given date.
+function getCompletedSessionForDate(history: Record<string, WorkoutSession>, date: string) {
+  const sessions = Object.values(history).filter((session) => session.date === date && session.status === "completed");
+  if (!sessions.length) {
+    return undefined;
+  }
+  return sessions.sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""))[0];
+}
+
 // Workout tab screen with today summary and exercise placeholders.
 export function WorkoutScreen() {
   // Pull planner state and persistence actions from the app context.
@@ -64,10 +79,17 @@ export function WorkoutScreen() {
     completeSession,
   } = useAppState();
 
+  // Track the currently selected workout template.
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<TemplateKey>("upper");
+  // Track template changes so we can regenerate a plan once per selection.
+  const [templateChangeRequested, setTemplateChangeRequested] = useState(false);
+  // Toggle the template dropdown modal.
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  // Store exercise name lookups keyed by exercise id.
+  const [exerciseNameById, setExerciseNameById] = useState<Record<string, Exercise>>({});
+
   // Track which exercise row is expanded for inline editing.
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  // Track whether the swap list is open for the expanded exercise.
-  const [showAlternatives, setShowAlternatives] = useState<boolean>(false);
   // Store a snapshot of the last saved plan to allow cancel.
   const [planSnapshot, setPlanSnapshot] = useState<WorkoutPlan | null>(null);
   // Local draft values for the expanded exercise inputs.
@@ -78,6 +100,11 @@ export function WorkoutScreen() {
   });
 
   // Build a safe check-in fallback for planner input.
+  // Resolve the selected workout template or fall back to the first entry.
+  const activeTemplate = useMemo(() => {
+    return getTemplateByKey(selectedTemplateKey) ?? WORKOUT_TEMPLATES[0];
+  }, [selectedTemplateKey]);
+
   const todayCheckIn = useMemo<CheckIn>(() => {
     return (
       checkInByDate[selectedDate] ?? {
@@ -88,30 +115,45 @@ export function WorkoutScreen() {
     );
   }, [checkInByDate, selectedDate]);
 
-  // Generate a plan when missing or when regeneration is requested.
+  // Generate a plan when missing, when regeneration is requested, or after a template change.
   useEffect(() => {
     // Avoid generation until hydration completes to prevent overwriting persisted data.
     if (!hydrated || !lastWorkout) {
       return;
     }
     const existing = planByDate[selectedDate];
-    if (!existing || needsRegen) {
-      // Create a new version id only when regeneration is requested.
-      const nextId = getPlanVersionId(selectedDate, existing?.id, needsRegen);
-      const result = buildLocalPlan({ checkIn: todayCheckIn, lastWorkout, planId: nextId });
-      // Build why from real inputs and persist alongside the plan.
-      const completedSession = workoutHistoryByDate[selectedDate];
-      const completedSummary = completedSession ? buildCompletedSummary(completedSession) : undefined;
-      const why = buildWhyExplanation({
-        checkIn: todayCheckIn,
-        plan: result.plan,
-        lastWorkout,
-        completedSessionForDate: completedSummary,
-      });
-      setPlan(selectedDate, result.plan);
-      setWhy(selectedDate, why);
-      setNeedsRegen(false);
+    const planNeedsMigration = Boolean(
+      existing?.exercises?.some((exercise: any) => !("exerciseId" in exercise)),
+    );
+    const shouldGenerate = !existing || needsRegen || templateChangeRequested || planNeedsMigration;
+    if (!shouldGenerate) {
+      return;
     }
+    // Create a new version id only when regeneration or template change is requested.
+    const nextId = getPlanVersionId(
+      selectedDate,
+      existing?.id,
+      needsRegen || templateChangeRequested,
+    );
+    const result = buildLocalPlan({
+      checkIn: todayCheckIn,
+      lastWorkout,
+      planId: nextId,
+      template: activeTemplate,
+    });
+    // Build why from real inputs and persist alongside the plan.
+    const completedSession = getCompletedSessionForDate(workoutHistoryByDate, selectedDate);
+    const completedSummary = completedSession ? buildCompletedSummary(completedSession) : undefined;
+    const why = buildWhyExplanation({
+      checkIn: todayCheckIn,
+      plan: result.plan,
+      lastWorkout,
+      completedSessionForDate: completedSummary,
+    });
+    setPlan(selectedDate, result.plan);
+    setWhy(selectedDate, why);
+    setNeedsRegen(false);
+    setTemplateChangeRequested(false);
   }, [
     hydrated,
     lastWorkout,
@@ -120,6 +162,8 @@ export function WorkoutScreen() {
     selectedDate,
     todayCheckIn,
     workoutHistoryByDate,
+    activeTemplate,
+    templateChangeRequested,
     setPlan,
     setWhy,
     setNeedsRegen,
@@ -129,6 +173,119 @@ export function WorkoutScreen() {
   const plan = planByDate[selectedDate];
   // Resolve the active session for this date (if any).
   const activeSession = activeSessionByDate[selectedDate];
+
+  // Disable template switching while a session is in progress.
+  const isTemplateLocked = Boolean(activeSession);
+  const templatePicker = (
+    <View style={{ gap: spacing.xs }}>
+      <Pressable
+        // Modal-based dropdown for choosing a workout template.
+        onPress={() => setShowTemplatePicker(true)}
+        disabled={isTemplateLocked}
+        style={{
+          borderWidth: 1,
+          borderColor: colors.border,
+          paddingVertical: spacing.sm,
+          paddingHorizontal: spacing.md,
+          borderRadius: 10,
+          backgroundColor: isTemplateLocked ? colors.card : "transparent",
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+          <Text style={textStyles.title}>Today: {activeTemplate.name}</Text>
+          <Text style={{ ...textStyles.title, fontSize: 20 }}>▼</Text>
+        </View>
+      </Pressable>
+
+      <Modal
+        // Modal keeps the dropdown lightweight and dependency-free.
+        visible={showTemplatePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTemplatePicker(false)}
+      >
+        <Pressable
+          // Tap outside to dismiss the picker.
+          onPress={() => setShowTemplatePicker(false)}
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.3)",
+            justifyContent: "center",
+            padding: spacing.md,
+          }}
+        >
+          <View
+            // Dropdown content container.
+            style={{
+              backgroundColor: colors.background,
+              borderRadius: 12,
+              padding: spacing.md,
+              borderWidth: 1,
+              borderColor: colors.border,
+              gap: spacing.sm,
+            }}
+          >
+            {WORKOUT_TEMPLATES.map((template) => (
+              <Pressable
+                // Select template and trigger deterministic regeneration.
+                key={template.key}
+                onPress={() => {
+                  setSelectedTemplateKey(template.key);
+                  setTemplateChangeRequested(true);
+                  setShowTemplatePicker(false);
+                }}
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  paddingVertical: spacing.sm,
+                  paddingHorizontal: spacing.md,
+                  borderRadius: 10,
+                }}
+              >
+                <Text style={textStyles.body}>{template.name}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+
+  // Align the dropdown selection with any persisted plan template key.
+  useEffect(() => {
+    if (plan?.template_key && plan.template_key !== selectedTemplateKey && !templateChangeRequested) {
+      setSelectedTemplateKey(plan.template_key as TemplateKey);
+    }
+  }, [plan?.template_key, selectedTemplateKey, templateChangeRequested]);
+
+  // Resolve exercise names from SQLite whenever the plan changes.
+  useEffect(() => {
+    let isMounted = true;
+    if (!plan) {
+      setExerciseNameById({});
+      return () => {
+        isMounted = false;
+      };
+    }
+    const ids = plan.exercises.map((exercise) => exercise.exerciseId);
+    listExercisesByIds(ids).then((map) => {
+      if (isMounted) {
+        setExerciseNameById(map);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [plan]);
+
+  // Build a simple id-to-name map for session creation.
+  const exerciseLabelById = useMemo(() => {
+    const map: Record<string, string> = {};
+    Object.values(exerciseNameById).forEach((exercise) => {
+      map[exercise.id] = exercise.name;
+    });
+    return map;
+  }, [exerciseNameById]);
 
   // Sanitize numeric plan edits to avoid empty or invalid values.
   function sanitizePlanNumber(value: string, fallback: number, min: number) {
@@ -181,31 +338,29 @@ export function WorkoutScreen() {
     if (plan) {
       setPlanSnapshot(plan);
     }
-    setExpandedId(exercise.id);
-    setShowAlternatives(false);
+    setExpandedId(exercise.exerciseId);
     setDraft({
       sets: String(exercise.sets),
       reps: String(exercise.reps),
-      weight: String(exercise.weight),
+      weight: String(exercise.weight_lbs),
     });
   }
 
   // Collapse the editor without changes to local draft.
   function handleCollapse() {
     setExpandedId(null);
-    setShowAlternatives(false);
   }
 
   // Update the plan immediately and persist after each edit.
-  function updateExerciseField(exerciseId: string, field: "sets" | "reps" | "weight", value: string) {
+  function updateExerciseField(exerciseId: string, field: "sets" | "reps" | "weight_lbs", value: string) {
     if (!plan) {
       return;
     }
     const nextExercises = plan.exercises.map((exercise) => {
-      if (exercise.id !== exerciseId) {
+      if (exercise.exerciseId !== exerciseId) {
         return exercise;
       }
-      const min = field === "weight" ? 0 : 1;
+      const min = field === "weight_lbs" ? 0 : 1;
       const nextValue = sanitizePlanNumber(value, exercise[field], min);
       return { ...exercise, [field]: nextValue };
     });
@@ -223,44 +378,20 @@ export function WorkoutScreen() {
     handleCollapse();
   }
 
-  // Swap exercise name using an alternative while keeping prescription numbers.
-  function handleSwap(exercise: ExercisePlan, nextName: string) {
-    if (!plan) {
-      return;
-    }
-    // Keep the exercise id stable; only update name and optional original_name.
-    const nextExercises = plan.exercises.map((item) => {
-      if (item.id !== exercise.id) {
-        return item;
-      }
-      return {
-        ...item,
-        name: nextName,
-        original_name: item.original_name ?? item.name,
-      };
-    });
-    const nextPlan = { ...plan, exercises: nextExercises };
-    // Persist swap immediately to keep state consistent.
-    setPlan(selectedDate, nextPlan);
-    setShowAlternatives(false);
-  }
-
   // Merge regenerated plan with user edits using id first, then index fallback.
   function mergePlans(freshPlan: WorkoutPlan, existingPlan: WorkoutPlan) {
     // Merge strategy: prefer user edits by matching exercise id.
     const mergedExercises = freshPlan.exercises.map((exercise, index) => {
-      const byId = existingPlan.exercises.find((item) => item.id === exercise.id);
+      const byId = existingPlan.exercises.find((item) => item.exerciseId === exercise.exerciseId);
       const byIndex = existingPlan.exercises[index];
       const source = byId ?? byIndex;
-      // Preserve user edits for sets/reps/weight/name when possible.
+      // Preserve user edits for sets/reps/weight when possible.
       if (source) {
         return {
           ...exercise,
-          name: source.name,
           sets: source.sets,
           reps: source.reps,
-          weight: source.weight,
-          original_name: source.original_name ?? exercise.original_name,
+          weight_lbs: source.weight_lbs,
         };
       }
       return exercise;
@@ -275,11 +406,16 @@ export function WorkoutScreen() {
     }
     // Regenerate creates a new plan version id (edits keep the old id).
     const nextId = getPlanVersionId(selectedDate, plan?.id, true);
-    const result = buildLocalPlan({ checkIn: todayCheckIn, lastWorkout, planId: nextId });
+    const result = buildLocalPlan({
+      checkIn: todayCheckIn,
+      lastWorkout,
+      planId: nextId,
+      template: activeTemplate,
+    });
     // Merge regenerated plan with existing edits using id/index fallbacks.
     const merged = plan ? mergePlans(result.plan, plan) : result.plan;
     // Build why from the merged plan to keep context aligned.
-    const completedSession = workoutHistoryByDate[selectedDate];
+    const completedSession = getCompletedSessionForDate(workoutHistoryByDate, selectedDate);
     const completedSummary = completedSession ? buildCompletedSummary(completedSession) : undefined;
     const why = buildWhyExplanation({
       checkIn: todayCheckIn,
@@ -365,7 +501,7 @@ export function WorkoutScreen() {
         // Loading state while hydration completes.
         contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
       >
-        <Text style={textStyles.title}>Workout</Text>
+        {templatePicker}
         <Card>
           <Text style={textStyles.heading}>Loading your plan...</Text>
           <Text style={textStyles.caption}>Just a moment while we sync your local data.</Text>
@@ -380,7 +516,7 @@ export function WorkoutScreen() {
         // Empty state when no plan is available yet.
         contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
       >
-        <Text style={textStyles.title}>Workout</Text>
+        {templatePicker}
         <Card>
           <Text style={textStyles.heading}>No plan yet</Text>
           <Text style={textStyles.caption}>
@@ -411,7 +547,7 @@ export function WorkoutScreen() {
         // Scrollable container for session logging UI.
         contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
       >
-        <Text style={textStyles.title}>Workout</Text>
+        {templatePicker}
 
         <Card>
           <Text style={textStyles.heading}>Session in progress</Text>
@@ -590,21 +726,7 @@ export function WorkoutScreen() {
       // Scrollable container keeps content accessible on small screens.
       contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
     >
-      <Text style={textStyles.title}>Workout</Text>
-
-      <Card>
-        <Text style={textStyles.heading}>
-          Today: {plan.title}
-        </Text>
-        <Text style={textStyles.caption}>
-          {plan.duration_min} min • {plan.equipment}
-        </Text>
-        {plan.generatedAt ? (
-          <Text style={textStyles.caption}>
-            Last updated: {formatTime(plan.generatedAt)}
-          </Text>
-        ) : null}
-      </Card>
+      {templatePicker}
 
       <Card>
         <Text style={textStyles.heading}>
@@ -624,11 +746,16 @@ export function WorkoutScreen() {
         <Text style={textStyles.heading}>Exercises</Text>
         <View style={{ gap: spacing.xs }}>
           {plan.exercises.map((exercise) => {
-            const isExpanded = expandedId === exercise.id;
+            const isExpanded = expandedId === exercise.exerciseId;
+            const exerciseName = exerciseNameById[exercise.exerciseId]?.name
+              ?? `Missing exercise (id: ${exercise.exerciseId})`;
+            const subtitle = exercise.isCardio
+              ? "15-30 min steady"
+              : formatOverviewPrescription(exercise.sets, exercise.reps, exercise.weight_lbs);
             return (
               <View
                 // Exercise row with inline edit controls.
-                key={exercise.id}
+                key={exercise.exerciseId}
                 style={{
                   borderWidth: 1,
                   borderColor: colors.border,
@@ -639,9 +766,9 @@ export function WorkoutScreen() {
               >
                 <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                   <View style={{ flex: 1, gap: spacing.xs }}>
-                    <Text style={textStyles.body}>{exercise.name}</Text>
+                    <Text style={textStyles.body}>{exerciseName}</Text>
                     <Text style={textStyles.caption}>
-                      {formatOverviewPrescription(exercise.sets, exercise.reps, exercise.weight)}
+                      {subtitle}
                     </Text>
                   </View>
                   <Pressable
@@ -664,7 +791,7 @@ export function WorkoutScreen() {
                           value={draft.sets}
                           onChangeText={(value) => {
                             setDraft((prev) => ({ ...prev, sets: value }));
-                            updateExerciseField(exercise.id, "sets", value);
+                            updateExerciseField(exercise.exerciseId, "sets", value);
                           }}
                           keyboardType="number-pad"
                           style={{
@@ -682,7 +809,7 @@ export function WorkoutScreen() {
                           value={draft.reps}
                           onChangeText={(value) => {
                             setDraft((prev) => ({ ...prev, reps: value }));
-                            updateExerciseField(exercise.id, "reps", value);
+                            updateExerciseField(exercise.exerciseId, "reps", value);
                           }}
                           keyboardType="number-pad"
                           style={{
@@ -700,7 +827,7 @@ export function WorkoutScreen() {
                           value={draft.weight}
                           onChangeText={(value) => {
                             setDraft((prev) => ({ ...prev, weight: value }));
-                            updateExerciseField(exercise.id, "weight", value);
+                            updateExerciseField(exercise.exerciseId, "weight_lbs", value);
                           }}
                           keyboardType="number-pad"
                           style={{
@@ -728,45 +855,7 @@ export function WorkoutScreen() {
                       >
                         <Text style={textStyles.caption}>Cancel</Text>
                       </Pressable>
-                      <Pressable
-                        // Toggle alternative selection list.
-                        onPress={() => setShowAlternatives((prev) => !prev)}
-                        style={{
-                          flex: 1,
-                          borderWidth: 1,
-                          borderColor: colors.border,
-                          paddingVertical: spacing.xs,
-                          borderRadius: 8,
-                          alignItems: "center",
-                        }}
-                      >
-                        <Text style={textStyles.caption}>
-                          {showAlternatives ? "Hide Swap" : "Swap"}
-                        </Text>
-                      </Pressable>
                     </View>
-
-                    {showAlternatives && exercise.alternatives?.length ? (
-                      <View style={{ gap: spacing.xs }}>
-                        {/* Inline alternatives list for swapping exercises. */}
-                        {exercise.alternatives.map((alt) => (
-                          <Pressable
-                            // Replace exercise name while preserving prescription.
-                            key={alt}
-                            onPress={() => handleSwap(exercise, alt)}
-                            style={{
-                              borderWidth: 1,
-                              borderColor: colors.border,
-                              paddingVertical: spacing.xs,
-                              paddingHorizontal: spacing.sm,
-                              borderRadius: 8,
-                            }}
-                          >
-                            <Text style={textStyles.caption}>{alt}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                    ) : null}
                   </View>
                 ) : null}
               </View>
@@ -779,7 +868,7 @@ export function WorkoutScreen() {
         <Pressable
           // Action button for starting the workout and creating a session.
           onPress={() => {
-            startSessionFromPlan(selectedDate, plan);
+            startSessionFromPlan(selectedDate, plan, exerciseLabelById);
           }}
           style={{
             flex: 1,

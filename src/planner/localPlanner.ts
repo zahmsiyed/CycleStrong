@@ -8,13 +8,11 @@ import type {
   WhyExplanation,
   WorkoutPlan,
 } from "../types/domain";
+import type { WorkoutTemplate } from "./workoutTemplates";
 
 // Hard safety bounds for intensity adjustments.
 const INTENSITY_MIN = -15;
 const INTENSITY_MAX = 5;
-
-// Accessory exercise ids eligible for conservative set reductions.
-const ACCESSORY_IDS = new Set(["hamstring_curl", "glute_med_cable"]);
 
 // PRD-safe disclaimer used for all recommendation text.
 const RECOMMENDATION_DISCLAIMER =
@@ -47,11 +45,11 @@ function sanitizePrescription(exercise: ExercisePlan): ExercisePlan {
     ...exercise,
     sets: Math.max(1, Math.floor(exercise.sets)),
     reps: Math.max(1, Math.floor(exercise.reps)),
-    weight: Math.max(0, exercise.weight),
+    weight_lbs: Math.max(0, exercise.weight_lbs),
   };
 }
 
-// Reduce one accessory set if allowed by total volume limits.
+// Reduce one accessory-leaning set if allowed by total volume limits.
 function applyAccessoryReduction(exercises: ExercisePlan[]) {
   const totalSets = exercises.reduce((sum, exercise) => sum + exercise.sets, 0);
   // Only reduce one set if we stay within the 20% reduction limit.
@@ -59,16 +57,19 @@ function applyAccessoryReduction(exercises: ExercisePlan[]) {
   if (!canReduce) {
     return exercises;
   }
-  let reduced = false;
-  return exercises.map((exercise) => {
-    if (reduced) {
+
+  // Prefer reducing the last non-cardio movement (more likely an accessory).
+  const reverseIndex = [...exercises].reverse().findIndex((exercise) => !exercise.isCardio && exercise.sets > 1);
+  if (reverseIndex < 0) {
+    return exercises;
+  }
+  const targetIndex = exercises.length - 1 - reverseIndex;
+
+  return exercises.map((exercise, index) => {
+    if (index !== targetIndex) {
       return exercise;
     }
-    if (ACCESSORY_IDS.has(exercise.id) && exercise.sets > 1) {
-      reduced = true;
-      return { ...exercise, sets: exercise.sets - 1 };
-    }
-    return exercise;
+    return { ...exercise, sets: exercise.sets - 1 };
   });
 }
 
@@ -96,8 +97,9 @@ export function buildLocalPlan(args: {
   checkIn: CheckIn;
   lastWorkout: LastWorkoutSummary;
   planId: string;
+  template: WorkoutTemplate;
 }) {
-  const { checkIn, lastWorkout, planId } = args;
+  const { checkIn, lastWorkout, planId, template } = args;
   const phase = getEffectivePhase(checkIn);
   const lowEnergy = hasSymptom(checkIn, "low_energy");
   const cramps = hasSymptom(checkIn, "cramps");
@@ -115,54 +117,22 @@ export function buildLocalPlan(args: {
   // Enforce absolute safety bounds for intensity.
   intensityPct = clamp(intensityPct, INTENSITY_MIN, INTENSITY_MAX);
 
-  // Base workout template for MVP (deterministic).
-  const exercises: ExercisePlan[] = [
-    {
-      id: "hip_thrust",
-      name: "Hip Thrust",
-      sets: 3,
-      reps: 5,
-      weight: 175,
-      alternatives: ["Glute Bridge", "Smith Hip Thrust"],
-    },
-    {
-      id: "romanian_deadlift",
-      name: "Romanian Deadlift",
-      sets: 3,
-      reps: 5,
-      weight: 175,
-      alternatives: ["DB RDL", "Light Good Morning"],
-    },
-    {
-      id: "leg_press",
-      name: "Leg Press",
-      sets: 3,
-      reps: 5,
-      weight: 175,
-      alternatives: ["Hack Squat", "Goblet Squat"],
-    },
-    {
-      id: "hamstring_curl",
-      name: "Hamstring Curl",
-      sets: 3,
-      reps: 5,
-      weight: 175,
-      alternatives: ["Nordic (assisted)", "Band Curl"],
-    },
-    {
-      id: "glute_med_cable",
-      name: "Glute Med Cable",
-      sets: 2,
-      reps: 5,
-      weight: 175,
-      alternatives: ["Band Lateral Walk", "Hip Abduction"],
-    },
-  ];
+  // Base workout template uses exercise ids; names are resolved via SQLite at render time.
+  const exercises: ExercisePlan[] = template.items.map((item) => ({
+    exerciseId: item.exerciseId,
+    sets: item.sets,
+    reps: item.reps,
+    weight_lbs: item.weight_lbs,
+    isCardio: item.isCardio,
+  }));
 
-  // Apply intensity adjustments by modifying weights only.
+  // Apply intensity adjustments by modifying weights only on non-cardio exercises.
   const adjustedExercises = exercises.map((exercise) => {
-    const adjustedWeight = roundToNearestFive(exercise.weight * (1 + intensityPct / 100));
-    return { ...exercise, weight: Math.max(0, adjustedWeight) };
+    if (exercise.isCardio) {
+      return exercise;
+    }
+    const adjustedWeight = roundToNearestFive(exercise.weight_lbs * (1 + intensityPct / 100));
+    return { ...exercise, weight_lbs: Math.max(0, adjustedWeight) };
   });
 
   // Apply symptom-based accessory set reduction with a 20% cap.
@@ -179,9 +149,10 @@ export function buildLocalPlan(args: {
     date: checkIn.date,
     // Track generation time for beta-safe plan freshness UI.
     generatedAt: new Date().toISOString(),
-    title: "Glutes + Hamstrings",
+    template_key: template.key,
+    title: template.name,
     duration_min: 60,
-    equipment: "Barbell + Machines",
+    equipment: "Mixed Equipment",
     intensity_adjustment_pct: intensityPct,
     intensity_reason: intensityReason,
     exercises: finalExercises,

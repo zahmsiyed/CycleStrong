@@ -24,11 +24,8 @@ function getActiveSymptoms(checkIn: CheckIn) {
 
 // Detect a simple volume reduction signal from the plan.
 function hasAccessorySetReduction(plan: WorkoutPlan) {
-  // For MVP we treat Hamstring Curl set reduction as a volume cut signal.
-  return plan.exercises.some((exercise) => (
-    (exercise.id === "hamstring_curl" && exercise.sets < 3) ||
-    (exercise.id === "glute_med_cable" && exercise.sets < 2)
-  ));
+  // Treat any non-cardio exercise reduced below the default 3 sets as a volume cut.
+  return plan.exercises.some((exercise) => !exercise.isCardio && exercise.sets < 3);
 }
 
 // Build a deterministic WhyExplanation from real inputs.
@@ -49,7 +46,7 @@ export function buildWhyExplanation(args: {
   const bullets: string[] = [];
   const intensityPct = plan.intensity_adjustment_pct;
 
-  if (intensityPct < 0) {``
+  if (intensityPct < 0) {
     bullets.push(`Adjusted loads by ${intensityPct}% to match today's readiness.`);
   } else if (intensityPct > 0) {
     bullets.push(`Adjusted loads by +${intensityPct}% for a confident day.`);

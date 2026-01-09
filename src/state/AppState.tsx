@@ -9,6 +9,7 @@ import {
 } from "../db/sqlite";
 import { ENABLE_DEMO_DATA } from "../config";
 import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
+import { getTemplateByKey, WORKOUT_TEMPLATES } from "../planner/workoutTemplates";
 import { buildWhyExplanation } from "../why/whyGenerator";
 import { initExercisesSchema, seedBuiltInExercisesIfEmpty } from "../db/exercises";
 import type {
@@ -44,7 +45,7 @@ type AppState = {
   setLastWorkout: (summary: LastWorkoutSummary) => Promise<void>;
   setPlan: (date: ISODate, plan: WorkoutPlan) => Promise<void>;
   setWhy: (date: ISODate, why: WhyExplanation) => Promise<void>;
-  startSessionFromPlan: (date: ISODate, plan: WorkoutPlan) => Promise<void>;
+  startSessionFromPlan: (date: ISODate, plan: WorkoutPlan, exerciseNameById: Record<string, string>) => Promise<void>;
   updateActiveSession: (date: ISODate, session: WorkoutSession) => Promise<void>;
   completeSession: (date: ISODate) => Promise<void>;
   getFeedbackForPlan: (planId: string) => PlanFeedback | undefined;
@@ -100,17 +101,21 @@ function getDemoLastWorkout(): LastWorkoutSummary {
 }
 
 // Build a new workout session from a plan for logging.
-function buildSessionFromPlan(date: ISODate, plan: WorkoutPlan): WorkoutSession {
+function buildSessionFromPlan(
+  date: ISODate,
+  plan: WorkoutPlan,
+  exerciseNameById: Record<string, string>,
+): WorkoutSession {
   const now = new Date().toISOString();
   // Pre-create set logs based on planned sets and reps.
   const exercises: ExerciseLog[] = plan.exercises.map((exercise) => {
     const sets: SetLog[] = Array.from({ length: exercise.sets }, () => ({
       reps: exercise.reps,
-      weight: exercise.weight,
+      weight: exercise.weight_lbs,
     }));
     return {
-      exerciseId: exercise.id,
-      name: exercise.name,
+      exerciseId: exercise.exerciseId,
+      name: exerciseNameById[exercise.exerciseId] ?? `Missing exercise (id: ${exercise.exerciseId})`,
       sets,
     };
   });
@@ -223,7 +228,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
       return trimmed;
     });
-  }, []);
+    },
+    [],
+  );
 
   // Load persisted check-ins, plans, and sessions from SQLite on startup.
   const loadPersistedState = useCallback(async () => {
@@ -279,10 +286,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         };
         const demoLastWorkout = getDemoLastWorkout();
         const demoPlanId = getPlanVersionId(today);
+        const demoTemplate = getTemplateByKey("lower") ?? WORKOUT_TEMPLATES[0];
         const demoPlan = buildLocalPlan({
           checkIn: demoCheckIn,
           lastWorkout: demoLastWorkout,
           planId: demoPlanId,
+          template: demoTemplate,
         }).plan;
         const demoWhy = buildWhyExplanation({
           checkIn: demoCheckIn,
@@ -363,16 +372,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Create and persist a new session derived from a plan.
-  const startSessionFromPlan = useCallback(async (date: ISODate, plan: WorkoutPlan) => {
-    const session = buildSessionFromPlan(date, plan);
-    let nextState: Record<ISODate, WorkoutSession> = {};
-    setActiveSessionByDate((prev) => {
-      nextState = { ...prev, [date]: session };
-      return nextState;
-    });
-    // Persist the active session map for autosave continuity.
-    await saveJsonByKey("activeSessionByDate", nextState);
-  }, []);
+  const startSessionFromPlan = useCallback(
+    async (date: ISODate, plan: WorkoutPlan, exerciseNameById: Record<string, string>) => {
+      const session = buildSessionFromPlan(date, plan, exerciseNameById);
+      let nextState: Record<ISODate, WorkoutSession> = {};
+      setActiveSessionByDate((prev) => {
+        nextState = { ...prev, [date]: session };
+        return nextState;
+      });
+      // Persist the active session map for autosave continuity.
+      await saveJsonByKey("activeSessionByDate", nextState);
+    },
+    [],
+  );
 
   // Update an active session and persist immediately.
   const updateActiveSession = useCallback(async (date: ISODate, session: WorkoutSession) => {
@@ -407,7 +419,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return nextActive;
       });
       setWorkoutHistoryByDate((prev) => {
-        nextHistory = { ...prev, [date]: completedSession };
+        // Key by session id to allow multiple completed workouts per day.
+        nextHistory = { ...prev, [completedSession.id]: completedSession };
         return nextHistory;
       });
 

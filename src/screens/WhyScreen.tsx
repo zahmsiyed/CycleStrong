@@ -33,6 +33,15 @@ function buildCompletedSummary(session: WorkoutSession): CompletedSessionSummary
   };
 }
 
+// Find the most recent completed session for a given date.
+function getCompletedSessionForDate(history: Record<string, WorkoutSession>, date: string) {
+  const sessions = Object.values(history).filter((session) => session.date === date && session.status === "completed");
+  if (!sessions.length) {
+    return undefined;
+  }
+  return sessions.sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""))[0];
+}
+
 // Why tab screen with explanation placeholders.
 export function WhyScreen() {
   // Pull planner state and persistence actions from the app context.
@@ -53,7 +62,7 @@ export function WhyScreen() {
   const plan = planByDate[selectedDate];
   const why = whyByDate[selectedDate];
   // Resolve completed session summary for today (if exists).
-  const completedSession = workoutHistoryByDate[selectedDate];
+  const completedSession = getCompletedSessionForDate(workoutHistoryByDate, selectedDate);
   const completedSummary = completedSession ? buildCompletedSummary(completedSession) : null;
 
   // Sync local feedback state when the plan changes.
