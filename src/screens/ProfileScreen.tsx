@@ -172,7 +172,7 @@ export function ProfileScreen() {
             <Text style={textStyles.titleLarge}>Zaina</Text>
             <Pressable
               // Placeholder settings button for future use.
-              onPress={() => console.log("settings")}
+              onPress={() => {}}
               style={{ paddingVertical: spacing.xs, paddingHorizontal: spacing.sm }}
             >
               <Text style={textStyles.action}>Settings</Text>

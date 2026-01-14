@@ -1,11 +1,13 @@
 // CycleScreen.tsx: Cycle check-in UI with local persistence via AppState.
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, Text, View, Pressable, TextInput, Modal, Platform } from "react-native";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
 import { textStyles } from "../ui/TextStyles";
 import { useAppState } from "../state/AppState";
+import { predictPhaseFromDay } from "../utils/cycle";
+import { formatDateFull } from "../utils/date";
 import type { CheckIn, CyclePhase, SymptomTag } from "../types/domain";
 
 // Cycle tab screen with real inputs and a check-in save action.
@@ -23,43 +25,62 @@ export function CycleScreen() {
   const [draft, setDraft] = useState<CheckIn>({
     date: selectedDate,
     predicted_phase: "unknown",
-    symptoms: [],
+    symptoms: ["none"],
   });
   // Local toggle for manual phase override controls.
   const [showManualPhase, setShowManualPhase] = useState<boolean>(false);
   // Local confirm toggle for data reset actions.
   const [confirmReset, setConfirmReset] = useState<boolean>(false);
-  // Beta-safe confirmation copy for successful updates.
-  const [showUpdatedNotice, setShowUpdatedNotice] = useState<boolean>(false);
-  // Track the timeout so we can clean it up between updates.
-  const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Local UI state for the date picker modal (beta-safe UX affordance).
+  // Local UI state for the date picker modal.
   const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
   // Local draft date while the iOS inline picker is open.
   const [pickerDraftDate, setPickerDraftDate] = useState<Date | null>(null);
+  // Track if we've already saved this draft to avoid duplicate saves.
+  const lastSavedDraftRef = useRef<string>("");
 
   // Rebuild the draft whenever the selected date or stored data changes.
   useEffect(() => {
     const stored = checkInByDate[selectedDate];
-    setDraft(
-      stored ?? {
-        date: selectedDate,
-        predicted_phase: "unknown",
-        symptoms: [],
-      },
-    );
+    
+    // Find the most recent check-in with cycle details to copy them if current date doesn't have them.
+    let cycleDetailsSource: CheckIn | undefined = stored;
+    if (!stored || (!stored.last_period_start && !stored.cycle_length && !stored.typical_bleed_days)) {
+      // Find the most recent check-in that has cycle details.
+      const checkInsWithDetails = Object.values(checkInByDate).filter(
+        (checkIn) => checkIn.last_period_start || checkIn.cycle_length || checkIn.typical_bleed_days,
+      );
+      if (checkInsWithDetails.length > 0) {
+        // Sort by date descending and take the most recent.
+        cycleDetailsSource = checkInsWithDetails.sort((a, b) => b.date.localeCompare(a.date))[0];
+      }
+    }
+    
+    // Merge stored check-in with cycle details from source if needed.
+    const mergedCheckIn: CheckIn = stored
+      ? {
+          ...stored,
+          // Copy cycle details from source if current check-in doesn't have them.
+          last_period_start: stored.last_period_start ?? cycleDetailsSource?.last_period_start,
+          cycle_length: stored.cycle_length ?? cycleDetailsSource?.cycle_length,
+          typical_bleed_days: stored.typical_bleed_days ?? cycleDetailsSource?.typical_bleed_days,
+        }
+      : {
+          date: selectedDate,
+          predicted_phase: "unknown",
+          symptoms: ["none"],
+          // Copy cycle details from most recent check-in if available.
+          last_period_start: cycleDetailsSource?.last_period_start,
+          cycle_length: cycleDetailsSource?.cycle_length,
+          typical_bleed_days: cycleDetailsSource?.typical_bleed_days,
+        };
+    
+    setDraft(mergedCheckIn);
     // Reset manual phase controls based on stored data.
     setShowManualPhase(Boolean(stored?.phase_override));
+    // Reset saved ref when date changes to allow saving new date's check-in.
+    lastSavedDraftRef.current = "";
   }, [checkInByDate, selectedDate]);
 
-  // Clear any pending confirmation timeout on unmount.
-  useEffect(() => {
-    return () => {
-      if (noticeTimeoutRef.current) {
-        clearTimeout(noticeTimeoutRef.current);
-      }
-    };
-  }, []);
 
   // Clamp numeric inputs to a safe range.
   function clampNumber(value: number, min: number, max: number) {
@@ -149,25 +170,59 @@ export function CycleScreen() {
 
   // Predict the phase based on the simple MVP day-range heuristic.
   const predictedPhase = useMemo(() => {
-    if (!predictedDay) {
-      return null;
-    }
-    // Phase prediction ranges are fixed for MVP.
-    if (predictedDay >= 1 && predictedDay <= 5) {
-      return "menstrual" as CyclePhase;
-    }
-    if (predictedDay >= 6 && predictedDay <= 13) {
-      return "follicular" as CyclePhase;
-    }
-    if (predictedDay >= 14 && predictedDay <= 16) {
-      return "ovulatory" as CyclePhase;
-    }
-    return "luteal" as CyclePhase;
+    return predictPhaseFromDay(predictedDay);
   }, [predictedDay]);
 
   // Determine which phase to display (manual override wins).
   const activePhase = draft.phase_override ?? predictedPhase ?? "unknown";
   const phaseLabel = draft.phase_override ? "(manual)" : "(predicted)";
+
+  // Auto-save check-in whenever draft changes (debounced to avoid excessive saves).
+  const autoSaveCheckIn = useCallback(async () => {
+    const draftKey = JSON.stringify({
+      date: selectedDate,
+      symptoms: draft.symptoms,
+      phase_override: draft.phase_override,
+      last_period_start: draft.last_period_start,
+      cycle_length: draft.cycle_length,
+      typical_bleed_days: draft.typical_bleed_days,
+    });
+    
+    // Skip if we've already saved this exact state.
+    if (draftKey === lastSavedDraftRef.current) {
+      return;
+    }
+    
+    lastSavedDraftRef.current = draftKey;
+    
+    // Persist predicted values into the stored check-in.
+    const clampedCycleLength =
+      draft.cycle_length !== undefined ? clampNumber(draft.cycle_length, 20, 40) : undefined;
+    const clampedBleedDays =
+      draft.typical_bleed_days !== undefined
+        ? clampNumber(draft.typical_bleed_days, 2, 10)
+        : undefined;
+    const payload: CheckIn = {
+      ...draft,
+      date: selectedDate,
+      cycle_length: clampedCycleLength,
+      typical_bleed_days: clampedBleedDays,
+      cycle_day: predictedDay ?? undefined,
+      predicted_phase: predictedPhase ?? "unknown",
+    };
+    await upsertCheckIn(payload);
+    // Trigger workout plan regeneration when check-in data changes.
+    setNeedsRegen(true);
+  }, [draft, selectedDate, predictedDay, predictedPhase, upsertCheckIn, setNeedsRegen]);
+
+  // Auto-save when draft changes (debounced).
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      autoSaveCheckIn();
+    }, 500); // 500ms debounce to avoid saving on every keystroke
+    
+    return () => clearTimeout(timeoutId);
+  }, [autoSaveCheckIn]);
 
   // Toggle a symptom chip and enforce the "none" rule.
   function toggleSymptom(symptom: SymptomTag) {
@@ -178,8 +233,8 @@ export function CycleScreen() {
         return { ...prev, symptoms: ["none"] };
       }
       const withoutNone = current.filter((item) => item !== "none");
-      const exists = withoutNone.includes(symptom);
-      const next = exists
+      const isSelected = withoutNone.includes(symptom);
+      const next = isSelected
         ? withoutNone.filter((item) => item !== symptom)
         : [...withoutNone, symptom];
       return { ...prev, symptoms: next };
@@ -198,6 +253,11 @@ export function CycleScreen() {
     });
   }
 
+  // Handle phase override selection with immediate save.
+  function handlePhaseOverride(phase: CyclePhase) {
+    setDraft((prev) => ({ ...prev, phase_override: phase }));
+  }
+
   // Open the date picker modal and seed the draft date.
   function openDatePicker() {
     // We keep Date objects local to the picker UI only.
@@ -211,7 +271,7 @@ export function CycleScreen() {
     setShowDatePicker(false);
   }
 
-  // Commit the currently selected picker date to the draft state.
+  // Commit the currently selected picker date to the draft state (auto-saves).
   function commitDatePickerSelection(date: Date | null) {
     if (!date) {
       return;
@@ -222,6 +282,8 @@ export function CycleScreen() {
       ...prev,
       last_period_start: toISODateString(safeDate),
     }));
+    // Reset saved ref to allow immediate save of date change.
+    lastSavedDraftRef.current = "";
   }
 
   // Handle picker changes per-platform for a safe modal UX.
@@ -242,35 +304,6 @@ export function CycleScreen() {
     }
   }
 
-  // Save the check-in, mark regen as needed.
-  async function handleUpdate() {
-    // Persist predicted values into the stored check-in for planner use.
-    const clampedCycleLength =
-      draft.cycle_length !== undefined ? clampNumber(draft.cycle_length, 20, 40) : undefined;
-    const clampedBleedDays =
-      draft.typical_bleed_days !== undefined
-        ? clampNumber(draft.typical_bleed_days, 2, 10)
-        : undefined;
-    const payload: CheckIn = {
-      ...draft,
-      date: selectedDate,
-      cycle_length: clampedCycleLength,
-      typical_bleed_days: clampedBleedDays,
-      cycle_day: predictedDay ?? undefined,
-      predicted_phase: predictedPhase ?? "unknown",
-    };
-    await upsertCheckIn(payload);
-    setNeedsRegen(true);
-
-    // Beta observability affordance: confirm update briefly.
-    setShowUpdatedNotice(true);
-    if (noticeTimeoutRef.current) {
-      clearTimeout(noticeTimeoutRef.current);
-    }
-    noticeTimeoutRef.current = setTimeout(() => {
-      setShowUpdatedNotice(false);
-    }, 2000);
-  }
 
   // Reset local data with a simple confirmation toggle.
   async function handleReset() {
@@ -291,30 +324,13 @@ export function CycleScreen() {
       // Scrollable container to keep layout flexible.
       contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md }}
     >
-      <Text style={textStyles.title}>Cycle</Text>
+      <Text style={textStyles.titleLarge}>{formatDateFull(selectedDate)}</Text>
 
       <Card>
         {/* Cycle day and phase display block. */}
         <Text style={textStyles.heading}>
           Day {predictedDay ?? "—"} of {draft.cycle_length ?? "—"} • Phase: {activePhase} {phaseLabel}
         </Text>
-        {/* Selected date control for switching the active check-in date. */}
-        <View style={{ gap: spacing.xs }}>
-          <Text style={textStyles.caption}>Selected date (YYYY-MM-DD)</Text>
-          <TextInput
-            // Date input used to change the active check-in date.
-            value={selectedDate}
-            onChangeText={setSelectedDate}
-            placeholder="YYYY-MM-DD"
-            autoCapitalize="none"
-            style={{
-              borderWidth: 1,
-              borderColor: colors.border,
-              padding: spacing.sm,
-              borderRadius: 10,
-            }}
-          />
-        </View>
         <Pressable
           // Toggle manual override controls when the prediction is inaccurate.
           onPress={toggleManualPhaseControls}
@@ -328,7 +344,7 @@ export function CycleScreen() {
               <Pressable
                 // Manual phase override buttons.
                 key={phase}
-                onPress={() => setDraft((prev) => ({ ...prev, phase_override: phase }))}
+                onPress={() => handlePhaseOverride(phase)}
                 style={{
                   borderWidth: 1,
                   borderColor: colors.border,
@@ -439,51 +455,45 @@ export function CycleScreen() {
         {/* Symptom selection chips (with "none" exclusivity). */}
         <Text style={textStyles.heading}>Symptoms (today)</Text>
         <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
-          {(["low_energy", "cramps", "bloating", "headache", "none"] as const).map(
-            (symptom) => {
-              const active = draft.symptoms?.includes(symptom);
-              return (
-                <Pressable
-                  // Chip button for symptom toggles.
-                  key={symptom}
-                  onPress={() => toggleSymptom(symptom)}
+          {([
+            { tag: "low_energy" as const, label: "Low energy" },
+            { tag: "cramps" as const, label: "Cramps" },
+            { tag: "bloating" as const, label: "Bloating" },
+            { tag: "headache" as const, label: "Headache" },
+            { tag: "none" as const, label: "None" },
+          ]).map(({ tag, label }) => {
+            const active = draft.symptoms?.includes(tag);
+            return (
+              <Pressable
+                // Chip button for symptom toggles.
+                key={tag}
+                onPress={() => toggleSymptom(tag)}
+                style={{
+                  borderWidth: 1,
+                  borderColor: active ? colors.text : colors.border,
+                  paddingHorizontal: spacing.sm,
+                  paddingVertical: spacing.xs,
+                  borderRadius: 999,
+                  backgroundColor: active ? "#E0E0E0" : "transparent",
+                }}
+              >
+                <Text
                   style={{
-                    borderWidth: 1,
-                    borderColor: colors.border,
-                    paddingHorizontal: spacing.sm,
-                    paddingVertical: spacing.xs,
-                    borderRadius: 999,
-                    backgroundColor: active ? colors.card : "transparent",
+                    ...textStyles.caption,
+                    color: active ? colors.text : colors.muted,
+                    fontWeight: active ? "600" : "400",
                   }}
                 >
-                  <Text style={textStyles.caption}>{symptom}</Text>
-                </Pressable>
-              );
-            },
-          )}
+                  {label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
       </Card>
 
-      <Pressable
-        // Primary action button for saving the check-in and flagging regen.
-        onPress={handleUpdate}
-        style={{
-          borderWidth: 1,
-          borderColor: colors.border,
-          paddingVertical: spacing.md,
-          borderRadius: 12,
-          alignItems: "center",
-        }}
-      >
-        <Text style={textStyles.body}>Update & regenerate plan</Text>
-      </Pressable>
-
-      {showUpdatedNotice ? (
-        <Text style={textStyles.caption}>Updated — today’s plan refreshed</Text>
-      ) : null}
-
       <Card>
-        {/* Reset local data control for beta support. */}
+        {/* Reset local data control. */}
         <Text style={textStyles.heading}>Reset local data</Text>
         <Text style={textStyles.caption}>
           Clears all local check-ins, plans, workout history, and feedback.

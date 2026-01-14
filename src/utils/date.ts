@@ -22,3 +22,26 @@ export function formatDateLong(iso: string): string {
   ];
   return `${months[parsed.getMonth()]} ${parsed.getDate()}, ${parsed.getFullYear()}`;
 }
+
+// Format an ISO date string as "January 14, 2026" for display (full month name).
+export function formatDateFull(iso: string): string {
+  const parsed = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return iso;
+  }
+  const months = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  return `${months[parsed.getMonth()]} ${parsed.getDate()}, ${parsed.getFullYear()}`;
+}

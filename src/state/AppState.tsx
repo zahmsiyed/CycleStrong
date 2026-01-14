@@ -7,11 +7,11 @@ import {
   saveCheckInByDate,
   saveJsonByKey,
 } from "../db/sqlite";
-import { ENABLE_DEMO_DATA } from "../config";
 import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
 import { getTemplateByKey, WORKOUT_TEMPLATES } from "../planner/workoutTemplates";
 import { buildWhyExplanation } from "../why/whyGenerator";
 import { initExercisesSchema, seedBuiltInExercisesIfEmpty } from "../db/exercises";
+import { buildCompletedSummary } from "../utils/session";
 import type {
   CheckIn,
   CompletedSessionSummary,
@@ -64,9 +64,14 @@ function getTodayISODate(): ISODate {
 }
 
 // Default last workout summary used to seed the app on first load.
+// Uses a relative date (7 days ago) to avoid hardcoded dates becoming outdated.
 function getDefaultLastWorkout(): LastWorkoutSummary {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const dateLabel = sevenDaysAgo.toISOString().slice(0, 10);
+
   return {
-    date_label: "2024-01-08",
+    date_label: dateLabel,
     name: "Lower A",
     top_sets: [
       { exercise: "Back Squat", prescription: "3x5 @ 185", note: "solid" },
@@ -84,21 +89,6 @@ function isDefaultLastWorkout(summary: LastWorkoutSummary) {
   return JSON.stringify(summary) === JSON.stringify(seeded);
 }
 
-// Build a demo last workout summary for screenshots.
-function getDemoLastWorkout(): LastWorkoutSummary {
-  return {
-    date_label: "2024-02-12",
-    name: "Glutes + Hamstrings",
-    top_sets: [
-      { exercise: "Hip Thrust", prescription: "8 @ 185" },
-      { exercise: "Romanian Deadlift", prescription: "6 @ 135" },
-      { exercise: "Leg Press", prescription: "10 @ 250" },
-    ],
-    volume_lbs: 14250,
-    rpe_avg: 7.2,
-    prs: [],
-  };
-}
 
 // Build a new workout session from a plan for logging.
 function buildSessionFromPlan(
@@ -130,31 +120,6 @@ function buildSessionFromPlan(
   };
 }
 
-// Compute summary stats from a completed session for UI and why context.
-function buildCompletedSummary(session: WorkoutSession): CompletedSessionSummary {
-  let totalVolume = 0;
-  let totalSets = 0;
-  let rpeSum = 0;
-  let rpeCount = 0;
-
-  session.exercises.forEach((exercise) => {
-    exercise.sets.forEach((set) => {
-      totalSets += 1;
-      totalVolume += set.reps * set.weight;
-      if (typeof set.rpe === "number") {
-        rpeSum += set.rpe;
-        rpeCount += 1;
-      }
-    });
-  });
-
-  return {
-    date: session.date,
-    volume_lbs: Math.round(totalVolume),
-    sets: totalSets,
-    rpe_avg: rpeCount ? Number((rpeSum / rpeCount).toFixed(1)) : 0,
-  };
-}
 
 // Build a LastWorkoutSummary based on a completed session.
 function buildLastWorkoutSummary(session: WorkoutSession): LastWorkoutSummary {
@@ -256,7 +221,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         "feedbackByPlanId",
         {},
       );
-      const demoSeeded = await loadJsonByKey<boolean>("demoSeeded", false);
 
       setCheckInByDate(storedCheckIns ?? {});
       setPlanByDate(storedPlans ?? {});
@@ -265,52 +229,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setWorkoutHistoryByDate(storedHistory ?? {});
       setFeedbackByPlanId(storedFeedback ?? {});
 
-      // Seed demo data once for screenshots when explicitly enabled.
-      const hasAnyData =
-        Object.keys(storedCheckIns ?? {}).length > 0 ||
-        Object.keys(storedPlans ?? {}).length > 0 ||
-        Object.keys(storedWhy ?? {}).length > 0 ||
-        Object.keys(storedHistory ?? {}).length > 0 ||
-        Object.keys(storedActiveSessions ?? {}).length > 0;
-
-      if (ENABLE_DEMO_DATA && !demoSeeded && !hasAnyData) {
-        const today = getTodayISODate();
-        const demoCheckIn: CheckIn = {
-          date: today,
-          cycle_day: 12,
-          cycle_length: 28,
-          predicted_phase: "follicular",
-          symptoms: ["none"],
-          last_period_start: today,
-          typical_bleed_days: 5,
-        };
-        const demoLastWorkout = getDemoLastWorkout();
-        const demoPlanId = getPlanVersionId(today);
-        const demoTemplate = getTemplateByKey("lower") ?? WORKOUT_TEMPLATES[0];
-        const demoPlan = buildLocalPlan({
-          checkIn: demoCheckIn,
-          lastWorkout: demoLastWorkout,
-          planId: demoPlanId,
-          template: demoTemplate,
-        }).plan;
-        const demoWhy = buildWhyExplanation({
-          checkIn: demoCheckIn,
-          plan: demoPlan,
-          lastWorkout: demoLastWorkout,
-        });
-
-        setCheckInByDate({ [today]: demoCheckIn });
-        setPlanByDate({ [today]: demoPlan });
-        setWhyByDate({ [today]: demoWhy });
-        setLastWorkoutState(demoLastWorkout);
-        setLastWorkoutIsPlaceholder(false);
-
-        await saveJsonByKey("checkinByDate", { [today]: demoCheckIn });
-        await saveJsonByKey("planByDate", { [today]: demoPlan });
-        await saveJsonByKey("whyByDate", { [today]: demoWhy });
-        await saveJsonByKey("lastWorkout", demoLastWorkout);
-        await saveJsonByKey("demoSeeded", true);
-      } else if (storedLastWorkout) {
+      if (storedLastWorkout) {
         // Seed a default last workout summary if none exists.
         setLastWorkoutState(storedLastWorkout);
         // Treat seeded defaults as placeholders when no history exists.
@@ -455,7 +374,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     await saveJsonByKey("feedbackByPlanId", nextState);
   }, []);
 
-  // Reset local state and SQLite keys for beta support.
+  // Reset local state and SQLite keys.
   const resetLocalData = useCallback(async () => {
     const keysToClear = [
       "checkinByDate",
@@ -465,7 +384,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       "workoutHistoryByDate",
       "feedbackByPlanId",
       "lastWorkout",
-      "demoSeeded",
     ];
     await kvClear(keysToClear);
 

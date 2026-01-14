@@ -37,8 +37,6 @@ export type ExercisePlan = {
 export type WorkoutPlan = {
   id: string;
   date: ISODate;
-  // Timestamp for plan freshness UI in the beta build.
-  generatedAt?: string;
   // Template key used to keep dropdown selection aligned with the plan.
   template_key?: string;
   title: string;

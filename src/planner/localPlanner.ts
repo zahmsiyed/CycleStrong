@@ -1,7 +1,6 @@
 // localPlanner.ts: Deterministic local planner with guardrails for MVP safety.
 import type {
   CheckIn,
-  CyclePhase,
   ExercisePlan,
   LastWorkoutSummary,
   SymptomTag,
@@ -9,14 +8,12 @@ import type {
   WorkoutPlan,
 } from "../types/domain";
 import type { WorkoutTemplate } from "./workoutTemplates";
+import { getEffectivePhase } from "../utils/checkIn";
+import { MIN_VOLUME_RATIO, RECOMMENDATION_DISCLAIMER } from "../utils/constants";
 
 // Hard safety bounds for intensity adjustments.
 const INTENSITY_MIN = -15;
 const INTENSITY_MAX = 5;
-
-// PRD-safe disclaimer used for all recommendation text.
-const RECOMMENDATION_DISCLAIMER =
-  "Not medical advice. Adjust based on pain and consult a professional if needed.";
 
 // Helper to round weights to the nearest 5 pounds.
 function roundToNearestFive(value: number) {
@@ -26,11 +23,6 @@ function roundToNearestFive(value: number) {
 // Helper to clamp a number within a safe range.
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-// Helper to resolve the effective phase (override wins).
-function getEffectivePhase(checkIn: CheckIn): CyclePhase {
-  return checkIn.phase_override ?? checkIn.predicted_phase;
 }
 
 // Helper to determine whether a symptom tag is present (ignoring "none").
@@ -52,8 +44,8 @@ function sanitizePrescription(exercise: ExercisePlan): ExercisePlan {
 // Reduce one accessory-leaning set if allowed by total volume limits.
 function applyAccessoryReduction(exercises: ExercisePlan[]) {
   const totalSets = exercises.reduce((sum, exercise) => sum + exercise.sets, 0);
-  // Only reduce one set if we stay within the 20% reduction limit.
-  const canReduce = totalSets > 0 && (totalSets - 1) / totalSets >= 0.8;
+  // Only reduce one set if we stay within the volume reduction limit.
+  const canReduce = totalSets > 0 && (totalSets - 1) / totalSets >= MIN_VOLUME_RATIO;
   if (!canReduce) {
     return exercises;
   }
@@ -105,12 +97,15 @@ export function buildLocalPlan(args: {
   const cramps = hasSymptom(checkIn, "cramps");
 
   // Determine intensity adjustment rules based on phase and symptoms.
+  const isLaterCycle = phase === "luteal" || phase === "menstrual";
+  const hasSevereSymptoms = lowEnergy && (isLaterCycle || cramps);
+
   let intensityPct = 0;
   let intensityReason = "baseline";
-  if (lowEnergy && ((phase === "luteal" || phase === "menstrual") || cramps)) {
+  if (hasSevereSymptoms) {
     intensityPct = -10;
     intensityReason = "symptoms: low energy";
-  } else if (phase === "luteal" || phase === "menstrual") {
+  } else if (isLaterCycle) {
     intensityPct = -5;
     intensityReason = "phase: later-cycle";
   }
@@ -135,7 +130,7 @@ export function buildLocalPlan(args: {
     return { ...exercise, weight_lbs: Math.max(0, adjustedWeight) };
   });
 
-  // Apply symptom-based accessory set reduction with a 20% cap.
+  // Apply symptom-based accessory set reduction with volume limit.
   const reducedExercises = (lowEnergy || cramps)
     ? applyAccessoryReduction(adjustedExercises)
     : adjustedExercises;
@@ -147,8 +142,6 @@ export function buildLocalPlan(args: {
   const plan: WorkoutPlan = {
     id: planId,
     date: checkIn.date,
-    // Track generation time for beta-safe plan freshness UI.
-    generatedAt: new Date().toISOString(),
     template_key: template.key,
     title: template.name,
     duration_min: 60,

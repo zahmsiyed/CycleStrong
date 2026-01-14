@@ -2,20 +2,12 @@
 import type {
   CheckIn,
   CompletedSessionSummary,
-  CyclePhase,
   LastWorkoutSummary,
   WhyExplanation,
   WorkoutPlan,
 } from "../types/domain";
-
-// PRD-safe disclaimer used for all recommendation text.
-const RECOMMENDATION_DISCLAIMER =
-  "Not medical advice. Adjust based on pain and consult a professional if needed.";
-
-// Resolve the effective cycle phase (manual override wins).
-function getEffectivePhase(checkIn: CheckIn): CyclePhase {
-  return checkIn.phase_override ?? checkIn.predicted_phase;
-}
+import { getEffectivePhase } from "../utils/checkIn";
+import { DEFAULT_SETS, RECOMMENDATION_DISCLAIMER } from "../utils/constants";
 
 // Extract human-readable symptom tags (excluding "none").
 function getActiveSymptoms(checkIn: CheckIn) {
@@ -24,8 +16,8 @@ function getActiveSymptoms(checkIn: CheckIn) {
 
 // Detect a simple volume reduction signal from the plan.
 function hasAccessorySetReduction(plan: WorkoutPlan) {
-  // Treat any non-cardio exercise reduced below the default 3 sets as a volume cut.
-  return plan.exercises.some((exercise) => !exercise.isCardio && exercise.sets < 3);
+  // Treat any non-cardio exercise reduced below the default sets as a volume cut.
+  return plan.exercises.some((exercise) => !exercise.isCardio && exercise.sets < DEFAULT_SETS);
 }
 
 // Build a deterministic WhyExplanation from real inputs.

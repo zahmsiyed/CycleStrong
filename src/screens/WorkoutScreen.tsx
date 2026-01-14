@@ -1,5 +1,5 @@
 // WorkoutScreen.tsx: Workout UI with plan view and session logging view.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, Text, View, Pressable, TextInput, Modal } from "react-native";
 import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
@@ -10,6 +10,8 @@ import { listExercisesByIds } from "../db/exercises";
 import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
 import { getTemplateByKey, WORKOUT_TEMPLATES } from "../planner/workoutTemplates";
 import { buildWhyExplanation } from "../why/whyGenerator";
+import { buildCompletedSummary, getCompletedSessionForDate } from "../utils/session";
+import { parseNumber, parseOptionalNumber } from "../utils/number";
 import type {
   CheckIn,
   CompletedSessionSummary,
@@ -24,40 +26,6 @@ import type { Exercise } from "../types/exercise";
 // Template key union used by the dropdown selector.
 type TemplateKey = (typeof WORKOUT_TEMPLATES)[number]["key"];
 
-// Build a summary from a completed session for the Why screen.
-function buildCompletedSummary(session: WorkoutSession): CompletedSessionSummary {
-  let totalVolume = 0;
-  let totalSets = 0;
-  let rpeSum = 0;
-  let rpeCount = 0;
-
-  session.exercises.forEach((exercise) => {
-    exercise.sets.forEach((set) => {
-      totalSets += 1;
-      totalVolume += set.reps * set.weight;
-      if (typeof set.rpe === "number") {
-        rpeSum += set.rpe;
-        rpeCount += 1;
-      }
-    });
-  });
-
-  return {
-    date: session.date,
-    volume_lbs: Math.round(totalVolume),
-    sets: totalSets,
-    rpe_avg: rpeCount ? Number((rpeSum / rpeCount).toFixed(1)) : 0,
-  };
-}
-
-// Find the most recent completed session for a given date.
-function getCompletedSessionForDate(history: Record<string, WorkoutSession>, date: string) {
-  const sessions = Object.values(history).filter((session) => session.date === date && session.status === "completed");
-  if (!sessions.length) {
-    return undefined;
-  }
-  return sessions.sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""))[0];
-}
 
 // Workout tab screen with today summary and exercise placeholders.
 export function WorkoutScreen() {
@@ -115,6 +83,9 @@ export function WorkoutScreen() {
     );
   }, [checkInByDate, selectedDate]);
 
+  // Track the last check-in used to generate the plan to detect changes.
+  const lastCheckInForPlanRef = useRef<string>("");
+
   // Generate a plan when missing, when regeneration is requested, or after a template change.
   useEffect(() => {
     // Avoid generation until hydration completes to prevent overwriting persisted data.
@@ -125,7 +96,17 @@ export function WorkoutScreen() {
     const planNeedsMigration = Boolean(
       existing?.exercises?.some((exercise: any) => !("exerciseId" in exercise)),
     );
-    const shouldGenerate = !existing || needsRegen || templateChangeRequested || planNeedsMigration;
+    
+    // Check if check-in data has changed since last plan generation.
+    const checkInKey = JSON.stringify({
+      symptoms: todayCheckIn.symptoms,
+      phase_override: todayCheckIn.phase_override,
+      predicted_phase: todayCheckIn.predicted_phase,
+      cycle_day: todayCheckIn.cycle_day,
+    });
+    const checkInChanged = checkInKey !== lastCheckInForPlanRef.current;
+    
+    const shouldGenerate = !existing || needsRegen || templateChangeRequested || planNeedsMigration || checkInChanged;
     if (!shouldGenerate) {
       return;
     }
@@ -154,6 +135,13 @@ export function WorkoutScreen() {
     setWhy(selectedDate, why);
     setNeedsRegen(false);
     setTemplateChangeRequested(false);
+    // Update the ref to track the check-in used for this plan.
+    lastCheckInForPlanRef.current = JSON.stringify({
+      symptoms: todayCheckIn.symptoms,
+      phase_override: todayCheckIn.phase_override,
+      predicted_phase: todayCheckIn.predicted_phase,
+      cycle_day: todayCheckIn.cycle_day,
+    });
   }, [
     hydrated,
     lastWorkout,
@@ -287,49 +275,9 @@ export function WorkoutScreen() {
     return map;
   }, [exerciseNameById]);
 
-  // Sanitize numeric plan edits to avoid empty or invalid values.
-  function sanitizePlanNumber(value: string, fallback: number, min: number) {
-    if (!value.trim()) {
-      return fallback;
-    }
-    const parsed = Number(value);
-    if (Number.isNaN(parsed)) {
-      return fallback;
-    }
-    return Math.max(min, parsed);
-  }
-
-  // Sanitize numeric session edits, keeping values non-negative.
-  function sanitizeSessionNumber(value: string, fallback: number) {
-    if (!value.trim()) {
-      return fallback;
-    }
-    const parsed = Number(value);
-    if (Number.isNaN(parsed)) {
-      return fallback;
-    }
-    return Math.max(0, parsed);
-  }
-
-  // Format a timestamp for the beta-friendly freshness label.
-  function formatTime(iso: string) {
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) {
-      return "—";
-    }
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-
   // Parse optional RPE values without crashing on empty input.
   function parseOptionalRpe(value: string, fallback?: number) {
-    if (!value.trim()) {
-      return undefined;
-    }
-    const parsed = Number(value);
-    if (Number.isNaN(parsed)) {
-      return fallback;
-    }
-    return Math.max(0, parsed);
+    return parseOptionalNumber(value, fallback, 0);
   }
 
   // Expand an exercise row and seed the local draft for editing.
@@ -361,7 +309,7 @@ export function WorkoutScreen() {
         return exercise;
       }
       const min = field === "weight_lbs" ? 0 : 1;
-      const nextValue = sanitizePlanNumber(value, exercise[field], min);
+      const nextValue = parseNumber(value, exercise[field], min);
       return { ...exercise, [field]: nextValue };
     });
     const nextPlan = { ...plan, exercises: nextExercises };
@@ -428,11 +376,6 @@ export function WorkoutScreen() {
     setNeedsRegen(false);
   }
 
-  // Update a full session and persist immediately.
-  function saveSession(nextSession: WorkoutSession) {
-    updateActiveSession(selectedDate, nextSession);
-  }
-
   // Update one exercise in the active session.
   function updateSessionExercise(
     exerciseId: string,
@@ -462,7 +405,7 @@ export function WorkoutScreen() {
         if (field === "rpe") {
           return { ...set, rpe: parseOptionalRpe(value, set.rpe) };
         }
-        return { ...set, [field]: sanitizeSessionNumber(value, set[field]) };
+        return { ...set, [field]: parseNumber(value, set[field], 0) };
       });
       return { ...exercise, sets: nextSets };
     });
@@ -482,6 +425,11 @@ export function WorkoutScreen() {
       ...exercise,
       note,
     }));
+  }
+
+  // Update a full session and persist immediately.
+  function saveSession(nextSession: WorkoutSession) {
+    updateActiveSession(selectedDate, nextSession);
   }
 
   // Add a new set, duplicating the last set's reps and weight.

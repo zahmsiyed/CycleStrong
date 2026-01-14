@@ -5,42 +5,9 @@ import { Card } from "../components/Card";
 import { colors, spacing } from "../theme";
 import { textStyles } from "../ui/TextStyles";
 import { useAppState } from "../state/AppState";
+import { buildCompletedSummary, getCompletedSessionForDate } from "../utils/session";
 import type { CompletedSessionSummary, PlanFeedback, WorkoutSession } from "../types/domain";
 
-// Build a summary from a completed session for the callout.
-function buildCompletedSummary(session: WorkoutSession): CompletedSessionSummary {
-  let totalVolume = 0;
-  let totalSets = 0;
-  let rpeSum = 0;
-  let rpeCount = 0;
-
-  session.exercises.forEach((exercise) => {
-    exercise.sets.forEach((set) => {
-      totalSets += 1;
-      totalVolume += set.reps * set.weight;
-      if (typeof set.rpe === "number") {
-        rpeSum += set.rpe;
-        rpeCount += 1;
-      }
-    });
-  });
-
-  return {
-    date: session.date,
-    volume_lbs: Math.round(totalVolume),
-    sets: totalSets,
-    rpe_avg: rpeCount ? Number((rpeSum / rpeCount).toFixed(1)) : 0,
-  };
-}
-
-// Find the most recent completed session for a given date.
-function getCompletedSessionForDate(history: Record<string, WorkoutSession>, date: string) {
-  const sessions = Object.values(history).filter((session) => session.date === date && session.status === "completed");
-  if (!sessions.length) {
-    return undefined;
-  }
-  return sessions.sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""))[0];
-}
 
 // Why tab screen with explanation placeholders.
 export function WhyScreen() {
@@ -122,8 +89,7 @@ export function WhyScreen() {
 
       {plan && why ? (
         <>
-          {/* Beta observability affordance: reassure the explanation matches today’s plan. */}
-          <Text style={textStyles.caption}>Explanation matches today’s plan</Text>
+          <Text style={textStyles.caption}>Explanation matches today's plan</Text>
         </>
       ) : null}
 
