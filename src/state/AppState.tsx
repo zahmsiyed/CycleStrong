@@ -11,6 +11,7 @@ import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
 import { getTemplateByKey, WORKOUT_TEMPLATES } from "../planner/workoutTemplates";
 import { buildWhyExplanation } from "../why/whyGenerator";
 import { initExercisesSchema, seedBuiltInExercisesIfEmpty } from "../db/exercises";
+import type { WeightUnit } from "../utils/units";
 import { buildCompletedSummary } from "../utils/session";
 import type {
   CheckIn,
@@ -39,6 +40,8 @@ type AppState = {
   activeSessionByDate: Record<ISODate, WorkoutSession>;
   workoutHistoryByDate: WorkoutHistoryByDate;
   feedbackByPlanId: Record<string, PlanFeedback>;
+  weightUnit: WeightUnit;
+  setWeightUnit: (unit: WeightUnit) => Promise<void>;
   setSelectedDate: (date: ISODate) => void;
   upsertCheckIn: (checkIn: CheckIn) => Promise<void>;
   setNeedsRegen: (value: boolean) => void;
@@ -138,6 +141,8 @@ function buildLastWorkoutSummary(session: WorkoutSession): LastWorkoutSummary {
     .map((set) => ({
       exercise: set.exercise,
       prescription: `${set.reps} @ ${set.weight}`,
+      reps: set.reps,
+      weight_lbs: set.weight,
     }));
 
   const summary = buildCompletedSummary(session);
@@ -179,6 +184,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [workoutHistoryByDate, setWorkoutHistoryByDate] = useState<WorkoutHistoryByDate>({});
   // Store feedback by plan version id (planId is the key).
   const [feedbackByPlanId, setFeedbackByPlanId] = useState<Record<string, PlanFeedback>>({});
+  // Store preferred weight unit (LBS is the internal source of truth).
+  const [weightUnit, setWeightUnitState] = useState<WeightUnit>("lbs");
 
   // Keep selectedDate stable and valid to avoid undefined date keys.
   const setSelectedDate = useCallback((value: ISODate) => {
@@ -221,6 +228,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         "feedbackByPlanId",
         {},
       );
+      const storedWeightUnit = await loadJsonByKey<WeightUnit>("weightUnit", "lbs");
 
       setCheckInByDate(storedCheckIns ?? {});
       setPlanByDate(storedPlans ?? {});
@@ -228,6 +236,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setActiveSessionByDate(storedActiveSessions ?? {});
       setWorkoutHistoryByDate(storedHistory ?? {});
       setFeedbackByPlanId(storedFeedback ?? {});
+      setWeightUnitState(storedWeightUnit === "kg" ? "kg" : "lbs");
 
       if (storedLastWorkout) {
         // Seed a default last workout summary if none exists.
@@ -362,6 +371,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [feedbackByPlanId],
   );
 
+  // Persist weight unit preference locally (LBS is stored internally).
+  const setWeightUnit = useCallback(async (unit: WeightUnit) => {
+    setWeightUnitState(unit);
+    await saveJsonByKey("weightUnit", unit);
+  }, []);
+
   // Persist plan feedback keyed by planId for version-specific notes.
   const saveFeedback = useCallback(async (feedback: PlanFeedback) => {
     // Persist feedback by planId to keep versioned notes intact.
@@ -419,6 +434,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       activeSessionByDate,
       workoutHistoryByDate,
       feedbackByPlanId,
+      weightUnit,
+      setWeightUnit,
       setSelectedDate,
       upsertCheckIn,
       setNeedsRegen,
@@ -445,6 +462,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       activeSessionByDate,
       workoutHistoryByDate,
       feedbackByPlanId,
+      weightUnit,
+      setWeightUnit,
       upsertCheckIn,
       getFeedbackForPlan,
       loadPersistedState,

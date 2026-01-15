@@ -5,6 +5,7 @@ import { Card } from "../components/Card";
 import { spacing } from "../theme";
 import { useTheme } from "../theme/ThemeProvider";
 import { formatOverviewPrescription } from "../utils/format";
+import { formatWeightValue, parseWeightInput } from "../utils/units";
 import { useAppState } from "../state/AppState";
 import { listExercisesByIds } from "../db/exercises";
 import { buildLocalPlan, getPlanVersionId } from "../planner/localPlanner";
@@ -41,6 +42,7 @@ export function WorkoutScreen() {
     lastWorkout,
     activeSessionByDate,
     workoutHistoryByDate,
+    weightUnit,
     setPlan,
     setWhy,
     setNeedsRegen,
@@ -132,6 +134,7 @@ export function WorkoutScreen() {
       plan: result.plan,
       lastWorkout,
       completedSessionForDate: completedSummary,
+      weightUnit,
     });
     setPlan(selectedDate, result.plan);
     setWhy(selectedDate, why);
@@ -292,7 +295,7 @@ export function WorkoutScreen() {
     setDraft({
       sets: String(exercise.sets),
       reps: String(exercise.reps),
-      weight: String(exercise.weight_lbs),
+      weight: formatWeightValue(exercise.weight_lbs, weightUnit),
     });
   }
 
@@ -372,6 +375,7 @@ export function WorkoutScreen() {
       plan: merged,
       lastWorkout,
       completedSessionForDate: completedSummary,
+      weightUnit,
     });
     setPlan(selectedDate, merged);
     setWhy(selectedDate, why);
@@ -557,7 +561,7 @@ export function WorkoutScreen() {
                     >
                       <TextInput
                         // Autosave weight input.
-                        value={String(set.weight)}
+                        value={formatWeightValue(set.weight, weightUnit)}
                         onChangeText={(value) =>
                           updateSessionSet(exercise.exerciseId, index, "weight", value)
                         }
@@ -581,7 +585,7 @@ export function WorkoutScreen() {
                           marginTop: -8,
                         }}
                       >
-                        lbs
+                        {weightUnit}
                       </Text>
                     </View>
                     <View
@@ -701,7 +705,7 @@ export function WorkoutScreen() {
               ?? `Missing exercise (id: ${exercise.exerciseId})`;
             const subtitle = exercise.isCardio
               ? "15-30 min steady"
-              : formatOverviewPrescription(exercise.sets, exercise.reps, exercise.weight_lbs);
+              : formatOverviewPrescription(exercise.sets, exercise.reps, exercise.weight_lbs, weightUnit);
             return (
               <View
                 // Exercise row with inline edit controls.

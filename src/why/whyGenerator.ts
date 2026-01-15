@@ -26,8 +26,9 @@ export function buildWhyExplanation(args: {
   plan: WorkoutPlan;
   lastWorkout: LastWorkoutSummary;
   completedSessionForDate?: CompletedSessionSummary;
+  weightUnit?: WeightUnit;
 }): WhyExplanation {
-  const { checkIn, plan, lastWorkout } = args;
+  const { checkIn, plan, lastWorkout, weightUnit = "lbs" } = args;
   // completedSessionForDate is intentionally handled in the UI for a separate callout.
   const phase = getEffectivePhase(checkIn);
   const phaseSource = checkIn.phase_override ? "manual" : "predicted";
@@ -65,9 +66,16 @@ export function buildWhyExplanation(args: {
 
   // Progression signal references last workout and today’s intent.
   const topSet = lastWorkout.top_sets[0];
-  const progressionSignal = intensityPct < 0
-    ? `Holding progression after ${topSet.exercise} (${topSet.prescription}) to protect quality.`
-    : `Progressing from ${topSet.exercise} (${topSet.prescription}) with steady intent.`;
+  const topSetLabel = topSet
+    ? (topSet.reps !== undefined && topSet.weight_lbs !== undefined
+        ? formatSummarySet(topSet.weight_lbs, topSet.reps, weightUnit)
+        : topSet.prescription)
+    : "";
+  const progressionSignal = topSet
+    ? (intensityPct < 0
+        ? `Holding progression after ${topSet.exercise} (${topSetLabel}) to protect quality.`
+        : `Progressing from ${topSet.exercise} (${topSetLabel}) with steady intent.`)
+    : "Holding progression with steady intent.";
 
   // Volume adjustment reflects set reductions when present.
   const volumeAdjustment = hasSetReduction

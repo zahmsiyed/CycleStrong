@@ -10,7 +10,7 @@ import { formatSummarySet } from "../utils/format";
 import type { WorkoutSession } from "../types/domain";
 
 // Build a summary from a completed session for list display.
-function summarizeSession(session: WorkoutSession) {
+function summarizeSession(session: WorkoutSession, weightUnit: "lbs" | "kg") {
   let totalSets = 0;
 
   // Pick one top set per exercise (highest reps * weight).
@@ -25,7 +25,7 @@ function summarizeSession(session: WorkoutSession) {
         return null;
       }
 
-      return `${exercise.name}: ${formatSummarySet(topSet.weight, topSet.reps)}`;
+      return `${exercise.name}: ${formatSummarySet(topSet.weight, topSet.reps, weightUnit)}`;
     })
     .filter((label): label is string => Boolean(label));
 
@@ -47,7 +47,7 @@ export function ProfileScreen({ onOpenSettings }: { onOpenSettings: () => void }
   // Use the active theme palette for all UI colors.
   const { colors, textStyles } = useTheme();
   // Pull completed workout history from global state.
-  const { workoutHistoryByDate } = useAppState();
+  const { workoutHistoryByDate, weightUnit } = useAppState();
   // Track per-session details toggles locally.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -88,7 +88,7 @@ export function ProfileScreen({ onOpenSettings }: { onOpenSettings: () => void }
 
   // Render a single workout summary card for the list.
   function renderWorkoutItem({ item }: { item: WorkoutSession }) {
-    const summary = summarizeSession(item);
+    const summary = summarizeSession(item, weightUnit);
     const isExpanded = Boolean(expanded[item.id]);
 
     return (
@@ -141,7 +141,7 @@ export function ProfileScreen({ onOpenSettings }: { onOpenSettings: () => void }
                     typeof set.rpe === "number" && set.rpe > 0 ? ` (RPE ${set.rpe})` : "";
                   return (
                     <Text key={`${exercise.exerciseId}-${index}`} style={textStyles.caption}>
-                      Set {index + 1}: {formatSummarySet(set.weight, set.reps)}
+                      Set {index + 1}: {formatSummarySet(set.weight, set.reps, weightUnit)}
                       {rpeLabel}
                     </Text>
                   );

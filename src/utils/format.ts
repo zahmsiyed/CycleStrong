@@ -1,9 +1,5 @@
 // format.ts: Shared formatting helpers for reps and weight display.
-
-// Always display weights with units, weight first.
-export function formatWeightLbs(weight: number): string {
-  return `${weight}lbs`;
-}
+import { formatWeight, type WeightUnit } from "./units";
 
 // Always display reps with labels when shown as a single number.
 export function formatReps(reps: number): string {
@@ -11,11 +7,16 @@ export function formatReps(reps: number): string {
 }
 
 // Summary format for a single set: "245lbs x 4 reps".
-export function formatSummarySet(weight: number, reps: number): string {
-  return `${formatWeightLbs(weight)} x ${formatReps(reps)}`;
+export function formatSummarySet(weightLbs: number, reps: number, unit: WeightUnit): string {
+  return `${formatWeight(weightLbs, unit)} x ${formatReps(reps)}`;
 }
 
 // Compact overview format for a plan: "3x8 @175lbs".
-export function formatOverviewPrescription(sets: number, reps: number, weight: number): string {
-  return `${sets}x${reps} @${formatWeightLbs(weight)}`;
+export function formatOverviewPrescription(
+  sets: number,
+  reps: number,
+  weightLbs: number,
+  unit: WeightUnit,
+): string {
+  return `${sets}x${reps} @${formatWeight(weightLbs, unit)}`;
 }

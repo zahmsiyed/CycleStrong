@@ -6,6 +6,7 @@ import { spacing } from "../theme";
 import { useTheme } from "../theme/ThemeProvider";
 import { useAppState } from "../state/AppState";
 import { buildCompletedSummary, getCompletedSessionForDate } from "../utils/session";
+import { buildWhyExplanation } from "../why/whyGenerator";
 import type { CompletedSessionSummary, PlanFeedback, WorkoutSession } from "../types/domain";
 
 
@@ -16,9 +17,12 @@ export function WhyScreen() {
   // Pull planner state and persistence actions from the app context.
   const {
     selectedDate,
+    checkInByDate,
     whyByDate,
     planByDate,
     workoutHistoryByDate,
+    lastWorkout,
+    weightUnit,
     getFeedbackForPlan,
     saveFeedback,
   } = useAppState();
@@ -29,10 +33,26 @@ export function WhyScreen() {
 
   // Resolve the plan and why to use for rendering (generated in WorkoutScreen).
   const plan = planByDate[selectedDate];
-  const why = whyByDate[selectedDate];
+  const storedWhy = whyByDate[selectedDate];
+  const checkIn = checkInByDate[selectedDate] ?? {
+    date: selectedDate,
+    predicted_phase: "unknown",
+    symptoms: ["none"],
+  };
   // Resolve completed session summary for today (if exists).
   const completedSession = getCompletedSessionForDate(workoutHistoryByDate, selectedDate);
   const completedSummary = completedSession ? buildCompletedSummary(completedSession) : null;
+
+  // Rebuild the explanation with the active weight unit to keep displays consistent.
+  const why = plan && lastWorkout
+    ? buildWhyExplanation({
+        checkIn,
+        plan,
+        lastWorkout,
+        completedSessionForDate: completedSummary ?? undefined,
+        weightUnit,
+      })
+    : storedWhy;
 
   // Sync local feedback state when the plan changes.
   useEffect(() => {

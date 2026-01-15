@@ -82,7 +82,7 @@ export type WorkoutHistoryByDate = Record<string, WorkoutSession>;
 export type LastWorkoutSummary = {
   date_label: string;
   name: string;
-  top_sets: Array<{ exercise: string; prescription: string; note?: string }>;
+  top_sets: Array<{ exercise: string; prescription: string; reps?: number; weight_lbs?: number; note?: string }>;
   volume_lbs: number;
   rpe_avg: number;
   prs: string[];

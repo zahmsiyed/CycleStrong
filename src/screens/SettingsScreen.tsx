@@ -10,8 +10,8 @@ import { useAppState } from "../state/AppState";
 export function SettingsScreen({ onDone }: { onDone: () => void }) {
   // Access theme controls and shared styles.
   const { colors, textStyles, mode, setThemeMode } = useTheme();
-  // Access the global reset helper from app state.
-  const { resetLocalData } = useAppState();
+  // Access the global reset helper and unit preference from app state.
+  const { resetLocalData, weightUnit, setWeightUnit } = useAppState();
   // Two-step confirmation to avoid accidental data loss.
   const [confirmReset, setConfirmReset] = useState(false);
 
@@ -70,6 +70,41 @@ export function SettingsScreen({ onDone }: { onDone: () => void }) {
                   }}
                 >
                   {option === "light" ? "Light" : "Dark"}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </Card>
+
+      <Card>
+        {/* Weight unit toggle controls display/input conversion without changing storage. */}
+        <Text style={textStyles.heading}>Weight units</Text>
+        <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs }}>
+          {(["lbs", "kg"] as const).map((unit) => {
+            const active = weightUnit === unit;
+            return (
+              <Pressable
+                // Update preferred unit while keeping storage in LBS.
+                key={unit}
+                onPress={() => setWeightUnit(unit)}
+                style={{
+                  borderWidth: 1,
+                  borderColor: active ? colors.text : colors.border,
+                  paddingHorizontal: spacing.md,
+                  paddingVertical: spacing.xs,
+                  borderRadius: 999,
+                  backgroundColor: active ? colors.card : "transparent",
+                }}
+              >
+                <Text
+                  style={{
+                    ...textStyles.caption,
+                    color: active ? colors.text : colors.muted,
+                    fontWeight: active ? "600" : "400",
+                  }}
+                >
+                  {unit.toUpperCase()}
                 </Text>
               </Pressable>
             );
