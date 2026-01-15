@@ -16,10 +16,8 @@ export function CycleScreen() {
   const {
     checkInByDate,
     selectedDate,
-    setSelectedDate,
     upsertCheckIn,
     setNeedsRegen,
-    resetLocalData,
   } = useAppState();
   // Local draft state to avoid persisting on every keystroke.
   const [draft, setDraft] = useState<CheckIn>({
@@ -29,8 +27,6 @@ export function CycleScreen() {
   });
   // Local toggle for manual phase override controls.
   const [showManualPhase, setShowManualPhase] = useState<boolean>(false);
-  // Local confirm toggle for data reset actions.
-  const [confirmReset, setConfirmReset] = useState<boolean>(false);
   // Local UI state for the date picker modal.
   const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
   // Local draft date while the iOS inline picker is open.
@@ -305,16 +301,6 @@ export function CycleScreen() {
   }
 
 
-  // Reset local data with a simple confirmation toggle.
-  async function handleReset() {
-    if (!confirmReset) {
-      setConfirmReset(true);
-      return;
-    }
-    await resetLocalData();
-    setConfirmReset(false);
-  }
-
   const hasCycleDetails = Boolean(
     draft.last_period_start || draft.cycle_length || draft.typical_bleed_days,
   );
@@ -490,31 +476,6 @@ export function CycleScreen() {
             );
           })}
         </View>
-      </Card>
-
-      <Card>
-        {/* Reset local data control. */}
-        <Text style={textStyles.heading}>Reset local data</Text>
-        <Text style={textStyles.caption}>
-          Clears all local check-ins, plans, workout history, and feedback.
-        </Text>
-        <Pressable
-          // Confirmation toggle for destructive reset.
-          onPress={handleReset}
-          style={{
-            marginTop: spacing.sm,
-            borderWidth: 1,
-            borderColor: confirmReset ? "#B00020" : colors.border,
-            paddingVertical: spacing.sm,
-            borderRadius: 10,
-            alignItems: "center",
-            backgroundColor: confirmReset ? "#FDECEC" : "transparent",
-          }}
-        >
-          <Text style={{ color: confirmReset ? "#B00020" : colors.text }}>
-            {confirmReset ? "Are you sure? Tap again to reset" : "Reset local data"}
-          </Text>
-        </Pressable>
       </Card>
 
       <Modal

@@ -6,11 +6,12 @@ import { CycleScreen } from "./src/screens/CycleScreen";
 import { WorkoutScreen } from "./src/screens/WorkoutScreen";
 import { WhyScreen } from "./src/screens/WhyScreen";
 import { ProfileScreen } from "./src/screens/ProfileScreen";
+import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { colors } from "./src/theme";
 import { AppStateProvider, useAppState } from "./src/state/AppState";
 
 // Tab keys used to control which screen is visible.
-type TabKey = "cycle" | "workout" | "why" | "profile";
+type TabKey = "cycle" | "workout" | "why" | "profile" | "settings";
 
 // App shell that handles tab state and screen rendering.
 function AppShell() {
@@ -38,7 +39,9 @@ function AppShell() {
       case "why":
         return <WhyScreen />;
       case "profile":
-        return <ProfileScreen />;
+        return <ProfileScreen onOpenSettings={() => setActiveTab("settings")} />;
+      case "settings":
+        return <SettingsScreen onDone={() => setActiveTab("profile")} />;
       default:
         return <WorkoutScreen />;
     }
@@ -47,7 +50,9 @@ function AppShell() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
       <View style={{ flex: 1 }}>{renderScreen()}</View>
-      <TabBar tabs={tabs} activeKey={activeTab} onChange={(key) => setActiveTab(key as TabKey)} />
+      {activeTab === "settings" ? null : (
+        <TabBar tabs={tabs} activeKey={activeTab} onChange={(key) => setActiveTab(key as TabKey)} />
+      )}
     </SafeAreaView>
   );
 }

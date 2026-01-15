@@ -43,7 +43,7 @@ function summarizeSession(session: WorkoutSession) {
 }
 
 // Profile screen with user header, chart, and full workout history list.
-export function ProfileScreen() {
+export function ProfileScreen({ onOpenSettings }: { onOpenSettings: () => void }) {
   // Pull completed workout history from global state.
   const { workoutHistoryByDate } = useAppState();
   // Track per-session details toggles locally.
@@ -172,7 +172,7 @@ export function ProfileScreen() {
             <Text style={textStyles.titleLarge}>Zaina</Text>
             <Pressable
               // Placeholder settings button for future use.
-              onPress={() => {}}
+              onPress={onOpenSettings}
               style={{ paddingVertical: spacing.xs, paddingHorizontal: spacing.sm }}
             >
               <Text style={textStyles.action}>Settings</Text>
