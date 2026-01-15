@@ -3,8 +3,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ScrollView, Text, View, Pressable, TextInput, Modal, Platform } from "react-native";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { Card } from "../components/Card";
-import { colors, spacing } from "../theme";
-import { textStyles } from "../ui/TextStyles";
+import { spacing } from "../theme";
+import { useTheme } from "../theme/ThemeProvider";
 import { useAppState } from "../state/AppState";
 import { predictPhaseFromDay } from "../utils/cycle";
 import { formatDateFull } from "../utils/date";
@@ -12,6 +12,8 @@ import type { CheckIn, CyclePhase, SymptomTag } from "../types/domain";
 
 // Cycle tab screen with real inputs and a check-in save action.
 export function CycleScreen() {
+  // Use the active theme palette for all UI colors.
+  const { colors, textStyles } = useTheme();
   // Pull check-ins and actions from the global state container.
   const {
     checkInByDate,
@@ -460,7 +462,7 @@ export function CycleScreen() {
                   paddingHorizontal: spacing.sm,
                   paddingVertical: spacing.xs,
                   borderRadius: 999,
-                  backgroundColor: active ? "#E0E0E0" : "transparent",
+                  backgroundColor: active ? colors.card : "transparent",
                 }}
               >
                 <Text

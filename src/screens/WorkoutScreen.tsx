@@ -2,8 +2,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, Text, View, Pressable, TextInput, Modal } from "react-native";
 import { Card } from "../components/Card";
-import { colors, spacing } from "../theme";
-import { textStyles } from "../ui/TextStyles";
+import { spacing } from "../theme";
+import { useTheme } from "../theme/ThemeProvider";
 import { formatOverviewPrescription } from "../utils/format";
 import { useAppState } from "../state/AppState";
 import { listExercisesByIds } from "../db/exercises";
@@ -29,6 +29,8 @@ type TemplateKey = (typeof WORKOUT_TEMPLATES)[number]["key"];
 
 // Workout tab screen with today summary and exercise placeholders.
 export function WorkoutScreen() {
+  // Use the active theme palette for all UI colors.
+  const { colors, textStyles } = useTheme();
   // Pull planner state and persistence actions from the app context.
   const {
     checkInByDate,

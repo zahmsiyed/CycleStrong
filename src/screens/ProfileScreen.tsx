@@ -2,8 +2,8 @@
 import React, { useMemo, useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
 import { Card } from "../components/Card";
-import { colors, spacing } from "../theme";
-import { textStyles } from "../ui/TextStyles";
+import { spacing } from "../theme";
+import { useTheme } from "../theme/ThemeProvider";
 import { useAppState } from "../state/AppState";
 import { formatDateLong } from "../utils/date";
 import { formatSummarySet } from "../utils/format";
@@ -44,6 +44,8 @@ function summarizeSession(session: WorkoutSession) {
 
 // Profile screen with user header, chart, and full workout history list.
 export function ProfileScreen({ onOpenSettings }: { onOpenSettings: () => void }) {
+  // Use the active theme palette for all UI colors.
+  const { colors, textStyles } = useTheme();
   // Pull completed workout history from global state.
   const { workoutHistoryByDate } = useAppState();
   // Track per-session details toggles locally.

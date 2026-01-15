@@ -2,8 +2,8 @@
 import React, { useEffect, useState } from "react";
 import { ScrollView, Text, View, Pressable, TextInput } from "react-native";
 import { Card } from "../components/Card";
-import { colors, spacing } from "../theme";
-import { textStyles } from "../ui/TextStyles";
+import { spacing } from "../theme";
+import { useTheme } from "../theme/ThemeProvider";
 import { useAppState } from "../state/AppState";
 import { buildCompletedSummary, getCompletedSessionForDate } from "../utils/session";
 import type { CompletedSessionSummary, PlanFeedback, WorkoutSession } from "../types/domain";
@@ -11,6 +11,8 @@ import type { CompletedSessionSummary, PlanFeedback, WorkoutSession } from "../t
 
 // Why tab screen with explanation placeholders.
 export function WhyScreen() {
+  // Use the active theme palette for all UI colors.
+  const { colors, textStyles } = useTheme();
   // Pull planner state and persistence actions from the app context.
   const {
     selectedDate,

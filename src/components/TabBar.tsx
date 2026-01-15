@@ -1,8 +1,8 @@
 // TabBar.tsx: Simple bottom tab bar using local state and Pressables.
 import React from "react";
 import { View, Text, Pressable } from "react-native";
-import { colors, radius, spacing } from "../theme";
-import { textStyles } from "../ui/TextStyles";
+import { radius, spacing } from "../theme";
+import { useTheme } from "../theme/ThemeProvider";
 
 // Tab definition used by the TabBar component.
 export type TabItem = {
@@ -19,6 +19,8 @@ type TabBarProps = {
 
 // Bottom tab bar with a basic active state style.
 export function TabBar({ tabs, activeKey, onChange }: TabBarProps) {
+  // Use theme-aware colors and typography for the tab bar.
+  const { colors, textStyles } = useTheme();
   return (
     <View
       // Fixed bottom bar container with light border.

@@ -7,7 +7,7 @@ import { WorkoutScreen } from "./src/screens/WorkoutScreen";
 import { WhyScreen } from "./src/screens/WhyScreen";
 import { ProfileScreen } from "./src/screens/ProfileScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
-import { colors } from "./src/theme";
+import { ThemeProvider, useTheme } from "./src/theme/ThemeProvider";
 import { AppStateProvider, useAppState } from "./src/state/AppState";
 
 // Tab keys used to control which screen is visible.
@@ -15,6 +15,7 @@ type TabKey = "cycle" | "workout" | "why" | "profile" | "settings";
 
 // App shell that handles tab state and screen rendering.
 function AppShell() {
+  const { colors } = useTheme();
   // Local state controls the active tab and visible screen.
   const [activeTab, setActiveTab] = useState<TabKey>("workout");
 
@@ -72,8 +73,10 @@ function AppInitializer() {
 // Root app wraps everything in the global AppStateProvider.
 export default function App() {
   return (
-    <AppStateProvider>
-      <AppInitializer />
-    </AppStateProvider>
+    <ThemeProvider>
+      <AppStateProvider>
+        <AppInitializer />
+      </AppStateProvider>
+    </ThemeProvider>
   );
 }

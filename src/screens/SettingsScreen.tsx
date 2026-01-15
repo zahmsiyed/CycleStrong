@@ -1,13 +1,15 @@
-// SettingsScreen.tsx: Minimal settings screen with a reset control for beta support.
+// SettingsScreen.tsx: Minimal settings screen with theme toggle and reset control.
 import React, { useState } from "react";
 import { ScrollView, Pressable, Text, View } from "react-native";
 import { Card } from "../components/Card";
-import { colors, spacing } from "../theme";
-import { textStyles } from "../ui/TextStyles";
+import { spacing } from "../theme";
+import { useTheme } from "../theme/ThemeProvider";
 import { useAppState } from "../state/AppState";
 
-// Settings screen with a single reset action and a back button.
+// Settings screen with a theme selector and a reset action.
 export function SettingsScreen({ onDone }: { onDone: () => void }) {
+  // Access theme controls and shared styles.
+  const { colors, textStyles, mode, setThemeMode } = useTheme();
   // Access the global reset helper from app state.
   const { resetLocalData } = useAppState();
   // Two-step confirmation to avoid accidental data loss.
@@ -39,6 +41,41 @@ export function SettingsScreen({ onDone }: { onDone: () => void }) {
           <Text style={textStyles.action}>Done</Text>
         </Pressable>
       </View>
+
+      <Card>
+        {/* Theme toggle lives here so the preference feels intentional and explicit. */}
+        <Text style={textStyles.heading}>Theme</Text>
+        <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs }}>
+          {(["light", "dark"] as const).map((option) => {
+            const active = mode === option;
+            return (
+              <Pressable
+                // Theme toggle persists immediately via ThemeProvider.
+                key={option}
+                onPress={() => setThemeMode(option)}
+                style={{
+                  borderWidth: 1,
+                  borderColor: active ? colors.text : colors.border,
+                  paddingHorizontal: spacing.md,
+                  paddingVertical: spacing.xs,
+                  borderRadius: 999,
+                  backgroundColor: active ? colors.card : "transparent",
+                }}
+              >
+                <Text
+                  style={{
+                    ...textStyles.caption,
+                    color: active ? colors.text : colors.muted,
+                    fontWeight: active ? "600" : "400",
+                  }}
+                >
+                  {option === "light" ? "Light" : "Dark"}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </Card>
 
       <Card>
         {/* Reset local data lives here to avoid cluttering the Cycle check-in UI. */}

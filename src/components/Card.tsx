@@ -1,7 +1,8 @@
 // Card.tsx: Simple bordered container for section grouping.
 import React from "react";
 import { View, type ViewStyle } from "react-native";
-import { colors, radius, spacing } from "../theme";
+import { radius, spacing } from "../theme";
+import { useTheme } from "../theme/ThemeProvider";
 
 // Props for the Card container.
 type CardProps = {
@@ -11,6 +12,8 @@ type CardProps = {
 
 // Reusable card component for consistent section layout.
 export function Card({ children, style }: CardProps) {
+  // Pull theme colors from the provider for light/dark support.
+  const { colors } = useTheme();
   return (
     <View
       // Base card styling with optional overrides.
